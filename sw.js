@@ -1,5 +1,5 @@
 // Plai Inventory Service Worker — enables PWA "Add to Home Screen"
-const CACHE_NAME = 'plai-inventory-v7';
+const CACHE_NAME = 'plai-inventory-v8';
 const urlsToCache = ['./'];
 
 self.addEventListener('install', event => {

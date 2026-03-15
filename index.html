@@ -418,6 +418,8 @@ function PlaiInventory() {
   const [kasirTanggal, setKasirTanggal] = useState(new Date().toISOString().split("T")[0]);
   const [kasirKeterangan, setKasirKeterangan] = useState("");
   const [kasirInvoiceManual, setKasirInvoiceManual] = useState("");
+  const [kasirShipping, setKasirShipping] = useState("none");
+  const [kasirShipCost, setKasirShipCost] = useState("");
 
   // Multi-SKU invoice mode for Barang Keluar
   const [invoiceMode, setInvoiceMode] = useState(false);
@@ -1026,22 +1028,22 @@ function PlaiInventory() {
     const total = Math.max(0, subtotal - diskonNilai);
     const bayar = parseInt(kasirBayar) || 0;
     if (kasirPayMethod === "cash" && bayar < total) return showToast("Uang bayar kurang!", "danger");
+    if (kasirShipping === "plai" && (!kasirShipCost || parseInt(kasirShipCost) <= 0)) return showToast("Isi biaya shipping Plai dulu!", "danger");
 
     // Deduct stock + record each item as keluar transaction
     // Generate invoice ID for grouping & split discount evenly across items
     const invoiceId = kasirInvoiceManual.trim() ? kasirInvoiceManual.trim() : "INV-" + Date.now();
+    const shipCostInt = kasirShipping === "plai" ? parseInt(kasirShipCost) || 0 : 0;
     const totalItems = cart.reduce((a, c) => a + c.qty, 0);
     const diskonPerUnit = totalItems > 0 ? Math.floor(diskonNilai / totalItems) : 0;
     const diskonSisa = totalItems > 0 ? diskonNilai - (diskonPerUnit * totalItems) : 0;
-    let itemIdx = 0;
     cart.forEach((c, ci) => {
       const catatanParts = ["Kasir"];
       if (kasirKeterangan.trim()) catatanParts.push(kasirKeterangan.trim());
-      // Distribute discount: each unit gets diskonPerUnit, first item absorbs rounding remainder
       const itemDiskon = diskonPerUnit * c.qty + (ci === 0 ? diskonSisa : 0);
-      const data = { sku: c.sku, nama: c.nama, jumlah: c.qty, channel: "terjual", shipping: "none", shippingCost: 0, catatan: catatanParts.join(" — "), staff: kasirStaff, tanggal: kasirTanggal, invoiceId, diskon: itemDiskon };
+      // Shipping cost only on first item to avoid double-counting
+      const data = { sku: c.sku, nama: c.nama, jumlah: c.qty, channel: "terjual", shipping: kasirShipping, shippingCost: ci === 0 ? shipCostInt : 0, catatan: catatanParts.join(" — "), staff: kasirStaff, tanggal: kasirTanggal, invoiceId, diskon: itemDiskon };
       handleKeluar(data);
-      itemIdx++;
     });
 
     const receipt = {
@@ -1051,6 +1053,8 @@ function PlaiInventory() {
       waktu: new Date().toLocaleString("id-ID"),
       items: [...cart],
       subtotal, diskonNilai, total,
+      shipping: kasirShipping,
+      shippingCost: shipCostInt,
       payMethod: kasirPayMethod,
       bayar: kasirPayMethod === "cash" ? bayar : total,
       kembalian: kasirPayMethod === "cash" ? bayar - total : 0,
@@ -1063,6 +1067,8 @@ function PlaiInventory() {
     setKasirBayar("");
     setKasirKeterangan("");
     setKasirInvoiceManual("");
+    setKasirShipping("none");
+    setKasirShipCost("");
   };
 
   const handleDeleteProduct = (sku) => {
@@ -2909,6 +2915,16 @@ alter table barcode_map disable row level security;`;
                     <span>Diskon</span><span>− {fmt(r.diskonNilai)}</span>
                   </div>
                 )}
+                {r.shipping === "plai" && r.shippingCost > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.danger, marginBottom: 4 }}>
+                    <span>💸 Shipping (Plai)</span><span>+ {fmt(r.shippingCost)}</span>
+                  </div>
+                )}
+                {r.shipping === "pelanggan" && (
+                  <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted, marginBottom: 4, fontSize: 11 }}>
+                    <span>📦 Shipping (Pelanggan)</span><span>—</span>
+                  </div>
+                )}
                 <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 16, color: COLORS.cream, borderTop: `1px solid ${COLORS.brownLight}`, paddingTop: 8, marginTop: 4 }}>
                   <span>Total</span><span>{fmt(r.total)}</span>
                 </div>
@@ -3068,6 +3084,26 @@ alter table barcode_map disable row level security;`;
                   </div>
                 </div>
               )}
+
+              {/* Shipping */}
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ ...s.label, marginBottom: 6 }}>🚚 Shipping</label>
+                <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  {[["none", "🏃 Pickup"], ["pelanggan", "📦 Pelanggan"], ["plai", "💸 Plai"]].map(([v, lbl]) => (
+                    <button key={v} onClick={() => { setKasirShipping(v); setKasirShipCost(""); }}
+                      style={{ ...s.btn(kasirShipping === v ? "primary" : "secondary"), flex: 1, fontSize: 11, padding: "7px 4px" }}>{lbl}</button>
+                  ))}
+                </div>
+                {kasirShipping === "plai" && (
+                  <div>
+                    <div style={{ fontSize: 11, color: COLORS.danger, fontWeight: 600, marginBottom: 4 }}>💸 Akan dicatat sebagai Shipping Expense Plai</div>
+                    <input type="number" min="0" placeholder="Biaya shipping (Rp)" value={kasirShipCost} onChange={e => setKasirShipCost(e.target.value)} style={{ ...s.input, fontSize: 13 }} />
+                  </div>
+                )}
+                {kasirShipping === "pelanggan" && (
+                  <div style={{ fontSize: 11, color: COLORS.textMuted }}>📦 Biaya shipping ditanggung pelanggan</div>
+                )}
+              </div>
 
               {/* Staff */}
               <div style={{ marginBottom: 12 }}>
