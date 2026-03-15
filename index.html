@@ -417,6 +417,7 @@ function PlaiInventory() {
   const [kasirStaff, setKasirStaff] = useState(STAFF_LIST[0]);
   const [kasirTanggal, setKasirTanggal] = useState(new Date().toISOString().split("T")[0]);
   const [kasirKeterangan, setKasirKeterangan] = useState("");
+  const [kasirInvoiceManual, setKasirInvoiceManual] = useState("");
 
   // Multi-SKU invoice mode for Barang Keluar
   const [invoiceMode, setInvoiceMode] = useState(false);
@@ -1028,7 +1029,7 @@ function PlaiInventory() {
 
     // Deduct stock + record each item as keluar transaction
     // Generate invoice ID for grouping & split discount evenly across items
-    const invoiceId = "INV-" + Date.now();
+    const invoiceId = kasirInvoiceManual.trim() ? kasirInvoiceManual.trim() : "INV-" + Date.now();
     const totalItems = cart.reduce((a, c) => a + c.qty, 0);
     const diskonPerUnit = totalItems > 0 ? Math.floor(diskonNilai / totalItems) : 0;
     const diskonSisa = totalItems > 0 ? diskonNilai - (diskonPerUnit * totalItems) : 0;
@@ -1061,6 +1062,7 @@ function PlaiInventory() {
     setKasirDiskonNilai("");
     setKasirBayar("");
     setKasirKeterangan("");
+    setKasirInvoiceManual("");
   };
 
   const handleDeleteProduct = (sku) => {
@@ -2183,8 +2185,14 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       // Excel export
       const exportExcel = () => {
         if (!window.XLSX) { showToast("Library Excel belum siap, coba refresh", "danger"); return; }
+        const fmtTgl = (iso) => {
+          if (!iso) return "-";
+          const [y, m, d] = iso.split("-");
+          return `${d}/${m}/${y.slice(2)}`;
+        };
         const rows = filteredTx.map(t => ({
-          Tanggal: t.tanggal,
+          Tanggal: fmtTgl(t.tanggal),
+          "No. Invoice": t.invoiceId || "-",
           SKU: t.sku,
           Nama: t.nama,
           Tipe: t.tipe,
@@ -2197,7 +2205,6 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
           Shipping: t.shipping === "plai" ? "Plai" : t.shipping === "pelanggan" ? "Pelanggan" : "Pickup",
           "Biaya Shipping": t.shippingCost || 0,
           Staff: t.staff || "-",
-          Invoice: t.invoiceId || "-",
           Catatan: t.catatan || "",
         }));
         const ws = window.XLSX.utils.json_to_sheet(rows);
@@ -3080,9 +3087,16 @@ alter table barcode_map disable row level security;`;
               </div>
 
               {/* Keterangan / Event */}
-              <div style={{ marginBottom: 14 }}>
+              <div style={{ marginBottom: 12 }}>
                 <label style={{ ...s.label, marginBottom: 6 }}>📝 Keterangan / Event</label>
                 <input type="text" style={{ ...s.input, fontSize: 13 }} placeholder="cth: Bazaar Grand Indonesia" value={kasirKeterangan} onChange={e => setKasirKeterangan(e.target.value)} />
+              </div>
+
+              {/* No. Invoice Manual */}
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ ...s.label, marginBottom: 6 }}>🧾 No. Invoice <span style={{ color: COLORS.textMuted, fontWeight: 400 }}>(opsional)</span></label>
+                <input type="text" style={{ ...s.input, fontSize: 13 }} placeholder="cth: INV/2026/03/001" value={kasirInvoiceManual} onChange={e => setKasirInvoiceManual(e.target.value)} />
+                {!kasirInvoiceManual.trim() && <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Kosong = nomor otomatis</div>}
               </div>
 
               <button onClick={confirmKasir} disabled={cart.length === 0}
