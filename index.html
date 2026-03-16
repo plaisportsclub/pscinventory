@@ -150,7 +150,7 @@ const save = (key, val) => {
 // This prevents state (selected SKU, form fields) from resetting on parent re-render
 const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, onOpenCamera, barcodeMap, onBarcodeNotFound }) => {
   const todayStr = new Date().toISOString().split("T")[0];
-  const [form, setForm] = useState({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: todayStr });
+  const [form, setForm] = useState({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: todayStr });
   const [scanInput, setScanInput] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
   const selected = inventory.find(i => i.sku === form.sku);
@@ -205,8 +205,9 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
     if (!form.sku || form.jumlah < 1) return showToast("Pilih barang dan jumlah dulu!", "danger");
     if (tipe !== "masuk" && selected && form.jumlah > selected.stok) return showToast("Stok tidak cukup!", "danger");
     if (tipe === "keluar" && form.shipping === "plai" && (!form.shippingCost || form.shippingCost <= 0)) return showToast("Isi biaya shipping Plai dulu!", "danger");
-    onSubmit({ sku: form.sku, jumlah: parseInt(form.jumlah), channel: form.channel, shipping: form.shipping, shippingCost: form.shipping === "plai" ? parseInt(form.shippingCost) : 0, catatan: form.catatan, staff: form.staff, peminjam: form.peminjam || "", nama: selected?.nama || "", tanggal: form.tanggal || todayStr });
-    setForm({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: new Date().toISOString().split("T")[0] });
+    const pelangganShipCostVal = form.shipping === "pelanggan" && !form.marketplace ? parseInt(form.pelangganShipCost) || 0 : 0;
+    onSubmit({ sku: form.sku, jumlah: parseInt(form.jumlah), channel: form.channel, shipping: form.shipping, shippingCost: form.shipping === "plai" ? parseInt(form.shippingCost) : 0, pelangganShipCost: pelangganShipCostVal, marketplace: form.marketplace || false, catatan: (form.marketplace ? (form.catatan ? form.catatan + " — Marketplace" : "Marketplace") : form.catatan), staff: form.staff, peminjam: form.peminjam || "", nama: selected?.nama || "", tanggal: form.tanggal || todayStr });
+    setForm({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: new Date().toISOString().split("T")[0] });
     setScanInput("");
   };
 
@@ -329,8 +330,25 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
               </div>
             )}
             {form.shipping === "pelanggan" && (
-              <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: COLORS.textMuted }}>
-                📦 Biaya shipping ditanggung pelanggan — tidak ada expense untuk Plai
+              <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, border: `1px solid ${COLORS.brownLight}` }}>
+                <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 8 }}>📦 Shipping ditanggung pelanggan</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: form.marketplace ? 0 : 10 }}>
+                  <div onClick={() => { set("marketplace", !form.marketplace); if (!form.marketplace) set("pelangganShipCost", ""); }}
+                    style={{ width: 40, height: 22, borderRadius: 11, background: form.marketplace ? COLORS.aqua : COLORS.brownLight, cursor: "pointer", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
+                    <div style={{ width: 18, height: 18, borderRadius: 9, background: COLORS.white, position: "absolute", top: 2, left: form.marketplace ? 20 : 2, transition: "left 0.2s" }} />
+                  </div>
+                  <span style={{ fontSize: 12, color: form.marketplace ? COLORS.aqua : COLORS.textMuted, fontWeight: form.marketplace ? 600 : 400 }}>Dari Marketplace</span>
+                </div>
+                {!form.marketplace && (
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 4, display: "block" }}>Biaya Shipping dari Pelanggan (opsional)</label>
+                    <input style={s.input} type="number" min="0" placeholder="cth: 15000" value={form.pelangganShipCost} onChange={e => set("pelangganShipCost", e.target.value)} />
+                    <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Kosongkan jika tidak perlu di-track</div>
+                  </div>
+                )}
+                {form.marketplace && (
+                  <div style={{ fontSize: 10, color: COLORS.aquaDark, marginTop: 4 }}>Shipping dihandle marketplace — tidak perlu track biaya</div>
+                )}
               </div>
             )}
           </div>
@@ -420,6 +438,8 @@ function PlaiInventory() {
   const [kasirInvoiceManual, setKasirInvoiceManual] = useState("");
   const [kasirShipping, setKasirShipping] = useState("none");
   const [kasirShipCost, setKasirShipCost] = useState("");
+  const [kasirMarketplace, setKasirMarketplace] = useState(false);
+  const [kasirPelangganShipCost, setKasirPelangganShipCost] = useState("");
 
   // Multi-SKU invoice mode for Barang Keluar
   const [invoiceMode, setInvoiceMode] = useState(false);
@@ -427,6 +447,8 @@ function PlaiInventory() {
   const [invoiceChannel, setInvoiceChannel] = useState("terjual");
   const [invoiceShipping, setInvoiceShipping] = useState("none");
   const [invoiceShipCost, setInvoiceShipCost] = useState("");
+  const [invoiceMarketplace, setInvoiceMarketplace] = useState(false);
+  const [invoicePelangganShipCost, setInvoicePelangganShipCost] = useState("");
   const [invoiceStaff, setInvoiceStaff] = useState(STAFF_LIST[0]);
   const [invoiceCatatan, setInvoiceCatatan] = useState("");
   const [invoiceSearchQ, setInvoiceSearchQ] = useState("");
@@ -451,6 +473,8 @@ function PlaiInventory() {
   const [scanChannel, setScanChannel] = useState("terjual");
   const [scanShipping, setScanShipping] = useState("none");
   const [scanShipCost, setScanShipCost] = useState("");
+  const [scanMarketplace, setScanMarketplace] = useState(false);
+  const [scanPelangganShipCost, setScanPelangganShipCost] = useState("");
   const [scanStaff, setScanStaff] = useState(STAFF_LIST[0]);
   const [showSiblings, setShowSiblings] = useState(false);
   const [scanHistory, setScanHistory] = useState([]);
@@ -944,7 +968,9 @@ function PlaiInventory() {
       channel: scanMode === "keluar" ? scanChannel : "-",
       shipping: scanMode === "keluar" ? scanShipping : "none",
       shippingCost: scanMode === "keluar" && scanShipping === "plai" ? parseInt(scanShipCost) : 0,
-      catatan: "",
+      pelangganShipCost: scanMode === "keluar" && scanShipping === "pelanggan" && !scanMarketplace ? parseInt(scanPelangganShipCost) || 0 : 0,
+      marketplace: scanMarketplace,
+      catatan: scanMarketplace ? "Marketplace" : "",
       staff: scanStaff,
     };
     const stokAfter = scanMode === "masuk" ? currentStok + data.jumlah : currentStok - data.jumlah;
@@ -956,6 +982,8 @@ function PlaiInventory() {
     setScanChannel("terjual");
     setScanShipping("none");
     setScanShipCost("");
+    setScanMarketplace(false);
+    setScanPelangganShipCost("");
     setTimeout(() => scanInputRef.current?.focus(), 150);
   };
 
@@ -1034,15 +1062,17 @@ function PlaiInventory() {
     // Generate invoice ID for grouping & split discount evenly across items
     const invoiceId = kasirInvoiceManual.trim() ? kasirInvoiceManual.trim() : "INV-" + Date.now();
     const shipCostInt = kasirShipping === "plai" ? parseInt(kasirShipCost) || 0 : 0;
+    const pelangganShipCostInt = kasirShipping === "pelanggan" && !kasirMarketplace ? parseInt(kasirPelangganShipCost) || 0 : 0;
     const totalItems = cart.reduce((a, c) => a + c.qty, 0);
     const diskonPerUnit = totalItems > 0 ? Math.floor(diskonNilai / totalItems) : 0;
     const diskonSisa = totalItems > 0 ? diskonNilai - (diskonPerUnit * totalItems) : 0;
     cart.forEach((c, ci) => {
       const catatanParts = ["Kasir"];
       if (kasirKeterangan.trim()) catatanParts.push(kasirKeterangan.trim());
+      if (kasirMarketplace) catatanParts.push("Marketplace");
       const itemDiskon = diskonPerUnit * c.qty + (ci === 0 ? diskonSisa : 0);
       // Shipping cost only on first item to avoid double-counting
-      const data = { sku: c.sku, nama: c.nama, jumlah: c.qty, channel: "terjual", shipping: kasirShipping, shippingCost: ci === 0 ? shipCostInt : 0, catatan: catatanParts.join(" — "), staff: kasirStaff, tanggal: kasirTanggal, invoiceId, diskon: itemDiskon };
+      const data = { sku: c.sku, nama: c.nama, jumlah: c.qty, channel: "terjual", shipping: kasirShipping, shippingCost: ci === 0 ? shipCostInt : 0, pelangganShipCost: ci === 0 ? pelangganShipCostInt : 0, marketplace: kasirMarketplace, catatan: catatanParts.join(" — "), staff: kasirStaff, tanggal: kasirTanggal, invoiceId, diskon: itemDiskon };
       handleKeluar(data);
     });
 
@@ -1055,6 +1085,8 @@ function PlaiInventory() {
       subtotal, diskonNilai, total,
       shipping: kasirShipping,
       shippingCost: shipCostInt,
+      pelangganShipCost: pelangganShipCostInt,
+      marketplace: kasirMarketplace,
       payMethod: kasirPayMethod,
       bayar: kasirPayMethod === "cash" ? bayar : total,
       kembalian: kasirPayMethod === "cash" ? bayar - total : 0,
@@ -1069,6 +1101,8 @@ function PlaiInventory() {
     setKasirInvoiceManual("");
     setKasirShipping("none");
     setKasirShipCost("");
+    setKasirMarketplace(false);
+    setKasirPelangganShipCost("");
   };
 
   const handleDeleteProduct = (sku) => {
@@ -1466,6 +1500,22 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                     <input type="number" min="0" placeholder="Biaya shipping (Rp)" value={scanShipCost}
                       onChange={e => setScanShipCost(e.target.value)}
                       style={{ ...s.input, marginTop: 8 }} />
+                  )}
+                  {scanShipping === "pelanggan" && (
+                    <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 10, marginTop: 8, border: `1px solid ${COLORS.brownLight}` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: scanMarketplace ? 0 : 8 }}>
+                        <div onClick={() => { setScanMarketplace(!scanMarketplace); if (!scanMarketplace) setScanPelangganShipCost(""); }}
+                          style={{ width: 36, height: 20, borderRadius: 10, background: scanMarketplace ? COLORS.aqua : COLORS.brownLight, cursor: "pointer", position: "relative", flexShrink: 0 }}>
+                          <div style={{ width: 16, height: 16, borderRadius: 8, background: COLORS.white, position: "absolute", top: 2, left: scanMarketplace ? 18 : 2, transition: "left 0.2s" }} />
+                        </div>
+                        <span style={{ fontSize: 11, color: scanMarketplace ? COLORS.aqua : COLORS.textMuted }}>Dari Marketplace</span>
+                      </div>
+                      {!scanMarketplace && (
+                        <input type="number" min="0" placeholder="Biaya shipping pelanggan (opsional)" value={scanPelangganShipCost}
+                          onChange={e => setScanPelangganShipCost(e.target.value)}
+                          style={{ ...s.input, fontSize: 12 }} />
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -1994,6 +2044,29 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                 </div>
               )}
 
+              {invoiceShipping === "pelanggan" && (
+                <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, border: `1px solid ${COLORS.brownLight}`, marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 8 }}>📦 Shipping ditanggung pelanggan</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: invoiceMarketplace ? 0 : 10 }}>
+                    <div onClick={() => { setInvoiceMarketplace(!invoiceMarketplace); if (!invoiceMarketplace) setInvoicePelangganShipCost(""); }}
+                      style={{ width: 40, height: 22, borderRadius: 11, background: invoiceMarketplace ? COLORS.aqua : COLORS.brownLight, cursor: "pointer", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
+                      <div style={{ width: 18, height: 18, borderRadius: 9, background: COLORS.white, position: "absolute", top: 2, left: invoiceMarketplace ? 20 : 2, transition: "left 0.2s" }} />
+                    </div>
+                    <span style={{ fontSize: 12, color: invoiceMarketplace ? COLORS.aqua : COLORS.textMuted, fontWeight: invoiceMarketplace ? 600 : 400 }}>Dari Marketplace</span>
+                  </div>
+                  {!invoiceMarketplace && (
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 4, display: "block" }}>Biaya Shipping dari Pelanggan (opsional)</label>
+                      <input style={s.input} type="number" min="0" placeholder="cth: 15000" value={invoicePelangganShipCost} onChange={e => setInvoicePelangganShipCost(e.target.value)} />
+                      <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Kosongkan jika tidak perlu di-track</div>
+                    </div>
+                  )}
+                  {invoiceMarketplace && (
+                    <div style={{ fontSize: 10, color: COLORS.aquaDark, marginTop: 4 }}>Shipping dihandle marketplace — tidak perlu track biaya</div>
+                  )}
+                </div>
+              )}
+
               <div style={s.grid2}>
                 <div style={s.formGroup}>
                   <label style={s.label}>Staff</label>
@@ -2012,16 +2085,20 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                 onClick={() => {
                   if (invoiceItems.length === 0) return showToast("Tambah minimal 1 item!", "danger");
                   if (invoiceShipping === "plai" && (!invoiceShipCost || parseInt(invoiceShipCost) <= 0)) return showToast("Isi biaya shipping!", "danger");
+                  const invPelangganCost = invoiceShipping === "pelanggan" && !invoiceMarketplace ? parseInt(invoicePelangganShipCost) || 0 : 0;
+                  const invCatatan = invoiceMarketplace ? (invoiceCatatan ? invoiceCatatan + " — Marketplace" : "Marketplace") : invoiceCatatan;
                   invoiceItems.forEach(item => {
                     const itemData = inventory.find(i => i.sku === item.sku);
                     if (itemData && item.jumlah > itemData.stok) return showToast(`Stok ${item.nama} tidak cukup!`, "danger");
-                    handleKeluar({ sku: item.sku, nama: item.nama, jumlah: item.jumlah, channel: invoiceChannel, shipping: invoiceShipping, shippingCost: invoiceShipping === "plai" ? parseInt(invoiceShipCost) : 0, catatan: invoiceCatatan, staff: invoiceStaff });
+                    handleKeluar({ sku: item.sku, nama: item.nama, jumlah: item.jumlah, channel: invoiceChannel, shipping: invoiceShipping, shippingCost: invoiceShipping === "plai" ? parseInt(invoiceShipCost) : 0, pelangganShipCost: invPelangganCost, marketplace: invoiceMarketplace, catatan: invCatatan, staff: invoiceStaff });
                   });
                   showToast(`✓ Invoice ${invoiceItems.length} item berhasil disimpan`);
                   setInvoiceItems([]);
                   setInvoiceChannel("terjual");
                   setInvoiceShipping("none");
                   setInvoiceShipCost("");
+                  setInvoiceMarketplace(false);
+                  setInvoicePelangganShipCost("");
                   setInvoiceStaff(STAFF_LIST[0]);
                   setInvoiceCatatan("");
                 }}
@@ -2048,7 +2125,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                     {t.shipping === "plai"
                       ? <span style={{ color: COLORS.danger, fontSize: 12, fontWeight: 600 }}>💸 Rp {(t.shippingCost || 0).toLocaleString("id-ID")}</span>
                       : t.shipping === "pelanggan"
-                      ? <span style={{ color: COLORS.textMuted, fontSize: 12 }}>📦 Pelanggan</span>
+                      ? <span style={{ color: COLORS.textMuted, fontSize: 12 }}>📦{t.marketplace ? " MP" : ""}{t.pelangganShipCost > 0 ? ` Rp ${t.pelangganShipCost.toLocaleString("id-ID")}` : ""}</span>
                       : <span style={{ color: COLORS.textMuted, fontSize: 12 }}>🏃 Pickup</span>
                     }
                   </td>
@@ -2135,6 +2212,8 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       const chFiltered = { terjual: filteredTx.filter(t => t.tipe === "keluar" && t.channel === "terjual").reduce((a, t) => a + t.jumlah, 0), kol: filteredTx.filter(t => t.tipe === "keluar" && t.channel === "kol").reduce((a, t) => a + t.jumlah, 0), event: filteredTx.filter(t => t.tipe === "keluar" && t.channel === "event").reduce((a, t) => a + t.jumlah, 0) };
       const shippingExpense = filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "plai").reduce((a, t) => a + (t.shippingCost || 0), 0);
       const shippingExpenseList = filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "plai");
+      const pelangganShipRevenue = filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "pelanggan").reduce((a, t) => a + (t.pelangganShipCost || 0), 0);
+      const marketplaceCount = filteredTx.filter(t => t.tipe === "keluar" && t.marketplace).length;
 
       const handleEditSave = (updated) => {
         setTransactions(prev => prev.map(t => t.id === updated.id ? { ...t, ...updated } : t));
@@ -2183,6 +2262,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
         rusak: arr.filter(t => t.tipe === "rusak").reduce((a, t) => a + t.jumlah, 0),
         revenue: arr.filter(t => t.tipe === "keluar").reduce((a, t) => a + ((t.harga || 0) * t.jumlah - (t.diskon || 0)), 0),
         shipping: arr.filter(t => t.tipe === "keluar" && t.shipping === "plai").reduce((a, t) => a + (t.shippingCost || 0), 0),
+        pelangganShip: arr.filter(t => t.tipe === "keluar" && t.shipping === "pelanggan").reduce((a, t) => a + (t.pelangganShipCost || 0), 0),
       });
       const rekapHari = rekapCalc(txToday);
       const rekap7 = rekapCalc(tx7Days);
@@ -2208,8 +2288,10 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
           Diskon: t.diskon || 0,
           "Harga Setelah Diskon": (t.harga || 0) * t.jumlah - (t.diskon || 0),
           Channel: t.channel || "-",
-          Shipping: t.shipping === "plai" ? "Plai" : t.shipping === "pelanggan" ? "Pelanggan" : "Pickup",
-          "Biaya Shipping": t.shippingCost || 0,
+          Shipping: t.shipping === "plai" ? "Plai" : t.shipping === "pelanggan" ? (t.marketplace ? "Pelanggan (Marketplace)" : "Pelanggan") : "Pickup",
+          "Biaya Shipping (Plai)": t.shippingCost || 0,
+          "Biaya Shipping (Pelanggan)": t.pelangganShipCost || 0,
+          Marketplace: t.marketplace ? "Ya" : "",
           Staff: t.staff || "-",
           Catatan: t.catatan || "",
         }));
@@ -2230,11 +2312,13 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
           { Keterangan: "Total Diskon", Nilai: totalDiskon },
           { Keterangan: "Revenue (Setelah Diskon)", Nilai: totalRevenue },
           { Keterangan: "Shipping Expense (Plai)", Nilai: shippingExpense },
+          { Keterangan: "Shipping Income (Pelanggan)", Nilai: pelangganShipRevenue },
           { Keterangan: "Nett Revenue", Nilai: totalRevenue - shippingExpense },
           { Keterangan: "", Nilai: "" },
           { Keterangan: "Channel: Terjual", Nilai: chFiltered.terjual },
           { Keterangan: "Channel: KOL", Nilai: chFiltered.kol },
           { Keterangan: "Channel: Event", Nilai: chFiltered.event },
+          { Keterangan: "Dari Marketplace", Nilai: marketplaceCount },
         ];
         const ws2 = window.XLSX.utils.json_to_sheet(summary);
         ws2["!cols"] = [{ wch: 25 }, { wch: 20 }];
@@ -2311,9 +2395,10 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
               <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COLORS.brownLight}` }}>
                 <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 8, letterSpacing: 1, textTransform: "uppercase" }}>Shipping</div>
                 {[
-                  ["📦 Ditanggung Pelanggan", transactions.filter(t => t.tipe === "keluar" && t.shipping === "pelanggan").length, COLORS.success, "order"],
+                  ["📦 Ditanggung Pelanggan", filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "pelanggan").length, COLORS.success, pelangganShipRevenue > 0 ? `order · Rp ${pelangganShipRevenue.toLocaleString("id-ID")}` : "order"],
+                  ["🏪 Dari Marketplace", marketplaceCount, COLORS.aqua, "order"],
                   ["💸 Ditanggung Plai", shippingExpenseList.length, COLORS.danger, `order · Rp ${shippingExpense.toLocaleString("id-ID")}`],
-                  ["🏃 Pickup / No Ship", transactions.filter(t => t.tipe === "keluar" && t.shipping === "none").length, COLORS.textMuted, "order"],
+                  ["🏃 Pickup / No Ship", filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "none").length, COLORS.textMuted, "order"],
                 ].map(([lbl, val, color, sub]) => (
                   <div key={lbl} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
                     <span>{lbl}</span>
@@ -2370,7 +2455,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                       <td style={s.td}>{t.channel && t.channel !== "-" ? <span style={{ ...s.badge(t.channel === "terjual" ? COLORS.aqua : t.channel === "kol" ? COLORS.warning : COLORS.success), color: COLORS.brownDark, fontSize: 10 }}>{t.channel}</span> : "-"}</td>
                       <td style={s.td}>
                         {t.shipping === "plai" ? <span style={{ color: COLORS.danger, fontSize: 11 }}>💸 Rp {(t.shippingCost||0).toLocaleString("id-ID")}</span>
-                          : t.shipping === "pelanggan" ? <span style={{ fontSize: 11, color: COLORS.textMuted }}>📦</span>
+                          : t.shipping === "pelanggan" ? <span style={{ fontSize: 11, color: COLORS.textMuted }}>📦{t.marketplace ? " MP" : ""}{t.pelangganShipCost > 0 ? ` ${t.pelangganShipCost.toLocaleString("id-ID")}` : ""}</span>
                           : <span style={{ fontSize: 11, color: COLORS.textMuted }}>-</span>}
                       </td>
                       <td style={{ ...s.td, fontSize: 11 }}>{t.staff}</td>
@@ -2461,8 +2546,25 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                     </div>
                     {editingTx.shipping === "plai" && (
                       <div style={s.formGroup}>
-                        <label style={s.label}>Biaya Shipping (Rp)</label>
+                        <label style={s.label}>Biaya Shipping Plai (Rp)</label>
                         <input style={s.input} type="number" min="0" value={editingTx.shippingCost || 0} onChange={e => setEditingTx(p => ({...p, shippingCost: parseInt(e.target.value) || 0}))} />
+                      </div>
+                    )}
+                    {editingTx.shipping === "pelanggan" && (
+                      <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                          <div onClick={() => setEditingTx(p => ({...p, marketplace: !p.marketplace, pelangganShipCost: !p.marketplace ? 0 : p.pelangganShipCost}))}
+                            style={{ width: 36, height: 20, borderRadius: 10, background: editingTx.marketplace ? COLORS.aqua : COLORS.brownLight, cursor: "pointer", position: "relative", flexShrink: 0 }}>
+                            <div style={{ width: 16, height: 16, borderRadius: 8, background: COLORS.white, position: "absolute", top: 2, left: editingTx.marketplace ? 18 : 2, transition: "left 0.2s" }} />
+                          </div>
+                          <span style={{ fontSize: 12, color: editingTx.marketplace ? COLORS.aqua : COLORS.textMuted }}>Dari Marketplace</span>
+                        </div>
+                        {!editingTx.marketplace && (
+                          <div>
+                            <label style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 4, display: "block" }}>Biaya Shipping Pelanggan (opsional)</label>
+                            <input style={s.input} type="number" min="0" value={editingTx.pelangganShipCost || 0} onChange={e => setEditingTx(p => ({...p, pelangganShipCost: parseInt(e.target.value) || 0}))} />
+                          </div>
+                        )}
                       </div>
                     )}
                   </>
@@ -2748,7 +2850,8 @@ create table if not exists inventory (
 create table if not exists transactions (
   id bigint primary key, tanggal text, sku text, nama text,
   tipe text, jumlah int, harga int default 0, channel text, shipping text,
-  "shippingCost" int default 0, catatan text, staff text
+  "shippingCost" int default 0, "pelangganShipCost" int default 0,
+  marketplace boolean default false, catatan text, staff text
 );
 create table if not exists pinjaman (
   id bigint primary key, tanggal text, sku text, nama text,
@@ -2761,7 +2864,14 @@ create table if not exists barcode_map (
 alter table inventory disable row level security;
 alter table transactions disable row level security;
 alter table pinjaman disable row level security;
-alter table barcode_map disable row level security;`;
+alter table barcode_map disable row level security;
+
+-- Migration: tambah kolom baru (aman dijalankan ulang)
+DO $$ BEGIN
+  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS "pelangganShipCost" int DEFAULT 0;
+  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS marketplace boolean DEFAULT false;
+EXCEPTION WHEN others THEN NULL;
+END $$;`;
 
       const handleConnect = () => {
         if (!sbInputUrl.trim() || !sbInputKey.trim()) return showToast("Isi URL dan Key dulu!", "danger");
@@ -2921,8 +3031,11 @@ alter table barcode_map disable row level security;`;
                   </div>
                 )}
                 {r.shipping === "pelanggan" && (
-                  <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted, marginBottom: 4, fontSize: 11 }}>
-                    <span>📦 Shipping (Pelanggan)</span><span>—</span>
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted, marginBottom: 2, fontSize: 11 }}>
+                      <span>📦 Shipping (Pelanggan){r.marketplace ? " — Marketplace" : ""}</span>
+                      <span>{r.pelangganShipCost > 0 ? fmt(r.pelangganShipCost) : "—"}</span>
+                    </div>
                   </div>
                 )}
                 <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 16, color: COLORS.cream, borderTop: `1px solid ${COLORS.brownLight}`, paddingTop: 8, marginTop: 4 }}>
@@ -3090,7 +3203,7 @@ alter table barcode_map disable row level security;`;
                 <label style={{ ...s.label, marginBottom: 6 }}>🚚 Shipping</label>
                 <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                   {[["none", "🏃 Pickup"], ["pelanggan", "📦 Pelanggan"], ["plai", "💸 Plai"]].map(([v, lbl]) => (
-                    <button key={v} onClick={() => { setKasirShipping(v); setKasirShipCost(""); }}
+                    <button key={v} onClick={() => { setKasirShipping(v); setKasirShipCost(""); setKasirMarketplace(false); setKasirPelangganShipCost(""); }}
                       style={{ ...s.btn(kasirShipping === v ? "primary" : "secondary"), flex: 1, fontSize: 11, padding: "7px 4px" }}>{lbl}</button>
                   ))}
                 </div>
@@ -3101,7 +3214,28 @@ alter table barcode_map disable row level security;`;
                   </div>
                 )}
                 {kasirShipping === "pelanggan" && (
-                  <div style={{ fontSize: 11, color: COLORS.textMuted }}>📦 Biaya shipping ditanggung pelanggan</div>
+                  <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, border: `1px solid ${COLORS.brownLight}` }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                      <span style={{ fontSize: 12, color: COLORS.textMuted }}>📦 Shipping ditanggung pelanggan</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: kasirMarketplace ? 0 : 10 }}>
+                      <div onClick={() => { setKasirMarketplace(!kasirMarketplace); if (!kasirMarketplace) setKasirPelangganShipCost(""); }}
+                        style={{ width: 40, height: 22, borderRadius: 11, background: kasirMarketplace ? COLORS.aqua : COLORS.brownLight, cursor: "pointer", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
+                        <div style={{ width: 18, height: 18, borderRadius: 9, background: COLORS.white, position: "absolute", top: 2, left: kasirMarketplace ? 20 : 2, transition: "left 0.2s" }} />
+                      </div>
+                      <span style={{ fontSize: 12, color: kasirMarketplace ? COLORS.aqua : COLORS.textMuted, fontWeight: kasirMarketplace ? 600 : 400 }}>Dari Marketplace</span>
+                    </div>
+                    {!kasirMarketplace && (
+                      <div>
+                        <label style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 4, display: "block" }}>Biaya Shipping dari Pelanggan (opsional)</label>
+                        <input type="number" min="0" placeholder="cth: 15000" value={kasirPelangganShipCost} onChange={e => setKasirPelangganShipCost(e.target.value)} style={{ ...s.input, fontSize: 13 }} />
+                        <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Kosongkan jika tidak perlu di-track</div>
+                      </div>
+                    )}
+                    {kasirMarketplace && (
+                      <div style={{ fontSize: 10, color: COLORS.aquaDark, marginTop: 4 }}>Shipping dihandle marketplace — tidak perlu track biaya</div>
+                    )}
+                  </div>
                 )}
               </div>
 
