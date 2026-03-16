@@ -762,11 +762,13 @@ function PlaiInventory() {
     const loadAll = async () => {
       setSbSyncing(true);
       try {
-        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }] = await Promise.all([
+        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }, { data: expData, error: e5 }, { data: incData, error: e6 }] = await Promise.all([
           sbClient.from('inventory').select('*'),
           sbClient.from('transactions').select('*').order('id', { ascending: false }),
           sbClient.from('pinjaman').select('*').order('id', { ascending: false }),
           sbClient.from('barcode_map').select('*').then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('expenses').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('incomes').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
         ]);
         if (e1 || e2 || e3) throw new Error((e1 || e2 || e3).message);
         if (inv && inv.length > 0) setInventory(inv);
@@ -777,6 +779,8 @@ function PlaiInventory() {
           bmap.forEach(row => { map[row.barcode] = row.sku; });
           setBarcodeMap(prev => ({ ...prev, ...map }));
         }
+        if (expData) setExpenses(expData);
+        if (incData) setIncomes(incData);
         setSbConnected(true);
         showToast('✓ Terhubung ke database!', 'success');
       } catch(e) {
@@ -807,6 +811,14 @@ function PlaiInventory() {
           data.forEach(row => { map[row.barcode] = row.sku; });
           setBarcodeMap(prev => ({ ...prev, ...map }));
         }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, async () => {
+        const { data } = await sbClient.from('expenses').select('*').order('id', { ascending: false });
+        if (data) setExpenses(data);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'incomes' }, async () => {
+        const { data } = await sbClient.from('incomes').select('*').order('id', { ascending: false });
+        if (data) setIncomes(data);
       })
       .subscribe();
     return () => sbClient.removeChannel(ch);
@@ -1369,6 +1381,8 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
   };
 
   const getStokPct = (item) => item.stok === 0 ? 0 : Math.min(100, (item.stok / (item.minimum * 3)) * 100);
+
+  const fmt = (n) => "Rp " + (n || 0).toLocaleString("id-ID");
 
   // ── Keuangan helpers ──
   const JURNAL_ACCOUNTS = [
@@ -3145,7 +3159,9 @@ END $$;`;
           if (pinjaman.length > 0) await sbClient.from('pinjaman').upsert(pinjaman);
           const bmRows = Object.entries(barcodeMap).map(([barcode, sku]) => ({ barcode, sku }));
           if (bmRows.length > 0) await sbClient.from('barcode_map').upsert(bmRows).catch(() => {});
-          showToast(`✓ ${inventory.length} produk + ${transactions.length} transaksi + ${bmRows.length} barcode diupload!`);
+          if (expenses.length > 0) await sbClient.from('expenses').upsert(expenses).catch(() => {});
+          if (incomes.length > 0) await sbClient.from('incomes').upsert(incomes).catch(() => {});
+          showToast(`✓ ${inventory.length} produk + ${transactions.length} transaksi + ${expenses.length} expenses + ${incomes.length} incomes diupload!`);
         } catch(e) { showToast("Gagal upload: " + e.message, "danger"); }
         setSbSyncing(false);
       };
@@ -3239,7 +3255,6 @@ END $$;`;
         : (parseInt(kasirDiskonNilai) || 0);
       const total = Math.max(0, subtotal - diskonNilai);
       const kembalian = kasirPayMethod === "cash" ? (parseInt(kasirBayar) || 0) - total : 0;
-      const fmt = (n) => "Rp " + n.toLocaleString("id-ID");
 
       if (kasirReceipt) {
         const r = kasirReceipt;
