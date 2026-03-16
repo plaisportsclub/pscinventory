@@ -86,6 +86,7 @@ const navItems = [
   { id: "label", label: "Cetak Label", icon: "▣" },
   { id: "data", label: "Import Data", icon: "⬆" },
   { id: "kasir", label: "Kasir", icon: "🛒" },
+  { id: "keuangan", label: "Keuangan", icon: "💰" },
   { id: "ai", label: "Tanya AI", icon: "✦" },
   { id: "settings", label: "Pengaturan", icon: "⚙" },
 ];
@@ -497,6 +498,31 @@ function PlaiInventory() {
   const scanBufferRef = useRef("");
   const scanTimerRef = useRef(null);
 
+  // ── Keuangan (Finance) state ──
+  const [keuanganTab, setKeuanganTab] = useState("expense"); // "expense" | "income" | "summary" | "export"
+  const [expenses, setExpenses] = useState(() => load("plai_expenses", []));
+  const [incomes, setIncomes] = useState(() => load("plai_incomes", []));
+  // expense form
+  const [expDate, setExpDate] = useState(new Date().toISOString().split("T")[0]);
+  const [expAccount, setExpAccount] = useState("");
+  const [expDesc, setExpDesc] = useState("");
+  const [expAmount, setExpAmount] = useState("");
+  const [expPayMethod, setExpPayMethod] = useState("transfer");
+  const [expRecipient, setExpRecipient] = useState("");
+  // income form
+  const [incDate, setIncDate] = useState(new Date().toISOString().split("T")[0]);
+  const [incSource, setIncSource] = useState("marketplace");
+  const [incChannel, setIncChannel] = useState("");
+  const [incDesc, setIncDesc] = useState("");
+  const [incAmount, setIncAmount] = useState("");
+  const [incPayMethod, setIncPayMethod] = useState("transfer");
+  const [incCustomer, setIncCustomer] = useState("");
+  // keuangan period filter
+  const [keuanganPeriod, setKeuanganPeriod] = useState("bulan"); // "hari", "minggu", "bulan", "semua"
+  // edit states
+  const [editingExpense, setEditingExpense] = useState(null);
+  const [editingIncome, setEditingIncome] = useState(null);
+
   // Camera Scanner Component
   const CameraScanner = ({ onScan, onClose }) => {
     const videoRef = useRef(null);
@@ -700,6 +726,8 @@ function PlaiInventory() {
   useEffect(() => { save("plai_inventory", inventory); }, [inventory]);
   useEffect(() => { save("plai_transactions", transactions); }, [transactions]);
   useEffect(() => { save("plai_pinjaman", pinjaman); }, [pinjaman]);
+  useEffect(() => { save("plai_expenses", expenses); }, [expenses]);
+  useEffect(() => { save("plai_incomes", incomes); }, [incomes]);
   useEffect(() => {
     save("plai_barcodemap", barcodeMap);
     // Sync to Supabase
@@ -1341,6 +1369,226 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
   };
 
   const getStokPct = (item) => item.stok === 0 ? 0 : Math.min(100, (item.stok / (item.minimum * 3)) * 100);
+
+  // ── Keuangan helpers ──
+  const JURNAL_ACCOUNTS = [
+    { code: "5-50000", name: "Cost of Sales", group: "COGS" },
+    { code: "5-50001", name: "Packaging", group: "COGS" },
+    { code: "5-50300", name: "Shipping", group: "COGS" },
+    { code: "5-50500", name: "Cost of Production", group: "COGS" },
+    { code: "6-60001", name: "Advertising & Promotion", group: "Selling" },
+    { code: "6-60002", name: "Commission & Fees", group: "Selling" },
+    { code: "6-60007", name: "KOL & PR Package", group: "Selling" },
+    { code: "6-60008", name: "Event Activation", group: "Selling" },
+    { code: "6-60009", name: "Research and Development", group: "Selling" },
+    { code: "6-60102", name: "Wages", group: "G&A" },
+    { code: "6-60103", name: "Meals and Transport", group: "G&A" },
+    { code: "6-60207", name: "Dues & Subscription", group: "G&A" },
+    { code: "6-60209", name: "Legal & Professional Fees", group: "G&A" },
+    { code: "6-60214", name: "Taxes and Licenses", group: "G&A" },
+    { code: "6-60221", name: "Freight & Delivery", group: "G&A" },
+    { code: "6-60301", name: "Stationery & Printing", group: "G&A" },
+    { code: "6-60303", name: "Securities and Cleaning", group: "G&A" },
+    { code: "6-60304", name: "Supplies and Materials", group: "G&A" },
+    { code: "8-80999", name: "Other Miscellaneous Expense", group: "Other" },
+  ];
+
+  const INCOME_SOURCES = [
+    { id: "marketplace", label: "Marketplace", channels: ["Shopee", "Tokopedia", "TikTok Shop", "Lazada", "Lainnya"] },
+    { id: "consignment", label: "Consignment", channels: [] },
+    { id: "b2b", label: "B2B Custom", channels: [] },
+    { id: "other", label: "Lainnya", channels: [] },
+  ];
+
+  const saveExpenseToDb = async (exp) => {
+    if (!sbClient) return;
+    try {
+      const { error } = await sbClient.from('expenses').upsert(exp, { onConflict: 'id' });
+      if (error) console.error('Expense save error:', error);
+    } catch (e) { console.error('Expense save error:', e); }
+  };
+
+  const saveIncomeToDb = async (inc) => {
+    if (!sbClient) return;
+    try {
+      const { error } = await sbClient.from('incomes').upsert(inc, { onConflict: 'id' });
+      if (error) console.error('Income save error:', error);
+    } catch (e) { console.error('Income save error:', e); }
+  };
+
+  const deleteExpenseFromDb = async (id) => {
+    if (!sbClient) return;
+    try {
+      await sbClient.from('expenses').delete().eq('id', id);
+    } catch (e) { console.error('Expense delete error:', e); }
+  };
+
+  const deleteIncomeFromDb = async (id) => {
+    if (!sbClient) return;
+    try {
+      await sbClient.from('incomes').delete().eq('id', id);
+    } catch (e) { console.error('Income delete error:', e); }
+  };
+
+  const addExpense = () => {
+    if (!expAccount || !expAmount) { showToast("Isi akun dan jumlah!", "danger"); return; }
+    const acc = JURNAL_ACCOUNTS.find(a => a.code === expAccount);
+    const exp = {
+      id: Date.now(),
+      date: expDate,
+      account_code: expAccount,
+      account_name: acc ? acc.name : expAccount,
+      description: expDesc,
+      amount: parseInt(expAmount) || 0,
+      payment_method: expPayMethod,
+      recipient: expRecipient,
+      created_at: new Date().toISOString(),
+    };
+    setExpenses(prev => [exp, ...prev]);
+    saveExpenseToDb(exp);
+    showToast("✓ Pengeluaran tersimpan!");
+    setExpDesc(""); setExpAmount(""); setExpRecipient("");
+  };
+
+  const addIncome = () => {
+    if (!incAmount) { showToast("Isi jumlah!", "danger"); return; }
+    const inc = {
+      id: Date.now(),
+      date: incDate,
+      source: incSource,
+      channel: incChannel,
+      description: incDesc,
+      amount: parseInt(incAmount) || 0,
+      payment_method: incPayMethod,
+      customer: incCustomer,
+      created_at: new Date().toISOString(),
+    };
+    setIncomes(prev => [inc, ...prev]);
+    saveIncomeToDb(inc);
+    showToast("✓ Pemasukan tersimpan!");
+    setIncDesc(""); setIncAmount(""); setIncCustomer(""); setIncChannel("");
+  };
+
+  const deleteExpense = (id) => {
+    setExpenses(prev => prev.filter(e => e.id !== id));
+    deleteExpenseFromDb(id);
+    showToast("Pengeluaran dihapus", "warning");
+  };
+
+  const deleteIncome = (id) => {
+    setIncomes(prev => prev.filter(e => e.id !== id));
+    deleteIncomeFromDb(id);
+    showToast("Pemasukan dihapus", "warning");
+  };
+
+  const filterByPeriod = (items, period) => {
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+    if (period === "semua") return items;
+    if (period === "hari") return items.filter(i => i.date === today);
+    if (period === "minggu") {
+      const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
+      return items.filter(i => new Date(i.date) >= weekAgo);
+    }
+    if (period === "bulan") {
+      const monthStart = today.substring(0, 7);
+      return items.filter(i => i.date && i.date.substring(0, 7) === monthStart);
+    }
+    return items;
+  };
+
+  const exportKeuanganExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const journalRows = [
+      ["Plai Sports Club"],
+      ["Journal Import"],
+      [`Period: ${keuanganPeriod === "semua" ? "All" : keuanganPeriod}`],
+      ["(in IDR)"],
+      [],
+      ["Account Number", "Account", "Description", "Debit", "Credit"],
+    ];
+
+    const filteredExp = filterByPeriod(expenses, keuanganPeriod);
+    const filteredInc = filterByPeriod(incomes, keuanganPeriod);
+
+    filteredExp.forEach(exp => {
+      const payAcc = exp.payment_method === "cash" ? "1-10001" : "1-10002-2";
+      const payName = exp.payment_method === "cash" ? "Cash" : "BCA - Gaby";
+      journalRows.push([]);
+      journalRows.push([null, `Expense | ${exp.date}`, null, null, null]);
+      journalRows.push([exp.account_code, exp.account_name, exp.description || "", exp.amount, 0]);
+      journalRows.push([payAcc, payName, exp.description || "", 0, exp.amount]);
+    });
+
+    filteredInc.forEach(inc => {
+      const payAcc = inc.payment_method === "cash" ? "1-10001" : "1-10002-2";
+      const payName = inc.payment_method === "cash" ? "Cash" : "BCA - Gaby";
+      const srcLabel = inc.source === "marketplace" ? `Marketplace${inc.channel ? " - " + inc.channel : ""}` : inc.source === "consignment" ? "Consignment" : inc.source === "b2b" ? "B2B Custom" : "Other";
+      journalRows.push([]);
+      journalRows.push([null, `Income (${srcLabel}) | ${inc.date}`, null, null, null]);
+      journalRows.push([payAcc, payName, inc.description || "", inc.amount, 0]);
+      journalRows.push(["4-40000", "Revenues - Products", `${srcLabel}: ${inc.description || ""}`, 0, inc.amount]);
+    });
+
+    const ws1 = XLSX.utils.aoa_to_sheet(journalRows);
+    ws1["!cols"] = [{ wch: 14 }, { wch: 30 }, { wch: 40 }, { wch: 15 }, { wch: 15 }];
+    XLSX.utils.book_append_sheet(wb, ws1, "Journal");
+
+    const expRows = [
+      ["Tanggal", "Kode Akun", "Nama Akun", "Deskripsi", "Jumlah", "Metode Bayar", "Penerima"],
+      ...filteredExp.map(e => [e.date, e.account_code, e.account_name, e.description, e.amount, e.payment_method, e.recipient])
+    ];
+    const ws2 = XLSX.utils.aoa_to_sheet(expRows);
+    ws2["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 28 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }];
+    XLSX.utils.book_append_sheet(wb, ws2, "Expenses");
+
+    const incRows = [
+      ["Tanggal", "Sumber", "Channel", "Deskripsi", "Jumlah", "Metode Bayar", "Customer"],
+      ...filteredInc.map(i => [i.date, i.source, i.channel, i.description, i.amount, i.payment_method, i.customer])
+    ];
+    const ws3 = XLSX.utils.aoa_to_sheet(incRows);
+    ws3["!cols"] = [{ wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }];
+    XLSX.utils.book_append_sheet(wb, ws3, "Incomes");
+
+    const totalExpByAccount = {};
+    filteredExp.forEach(e => {
+      if (!totalExpByAccount[e.account_code]) totalExpByAccount[e.account_code] = { name: e.account_name, total: 0 };
+      totalExpByAccount[e.account_code].total += e.amount;
+    });
+    const totalIncBySrc = {};
+    filteredInc.forEach(i => {
+      const key = i.source + (i.channel ? " - " + i.channel : "");
+      if (!totalIncBySrc[key]) totalIncBySrc[key] = 0;
+      totalIncBySrc[key] += i.amount;
+    });
+    const kasirRevenue = filterByPeriod(
+      transactions.filter(t => t.tipe === "keluar" && (t.channel === "terjual" || t.channel === "event" || t.channel === "kol")),
+      keuanganPeriod
+    ).reduce((sum, t) => sum + (t.jumlah * t.harga), 0);
+
+    const plRows = [
+      ["Plai Sports Club"],
+      ["Profit & Loss (Simplified)"],
+      [],
+      ["PENDAPATAN (REVENUE)"],
+      ["Penjualan (Kasir)", kasirRevenue],
+      ...Object.entries(totalIncBySrc).map(([k, v]) => [k, v]),
+      ["Total Pendapatan", kasirRevenue + filteredInc.reduce((s, i) => s + i.amount, 0)],
+      [],
+      ["PENGELUARAN (EXPENSES)"],
+      ...Object.entries(totalExpByAccount).sort((a, b) => a[0].localeCompare(b[0])).map(([code, d]) => [`${code} ${d.name}`, d.total]),
+      ["Total Pengeluaran", filteredExp.reduce((s, e) => s + e.amount, 0)],
+      [],
+      ["LABA / (RUGI)", (kasirRevenue + filteredInc.reduce((s, i) => s + i.amount, 0)) - filteredExp.reduce((s, e) => s + e.amount, 0)],
+    ];
+    const ws4 = XLSX.utils.aoa_to_sheet(plRows);
+    ws4["!cols"] = [{ wch: 35 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws4, "P&L");
+
+    const dateStr = new Date().toISOString().split("T")[0];
+    XLSX.writeFile(wb, `Plai_Keuangan_${dateStr}.xlsx`);
+    showToast("✓ Excel exported!");
+  };
 
   // ── PAGES ────────────────────────────────────────────────────────────────────
   const pages = {
@@ -3279,6 +3527,418 @@ END $$;`;
         </div>
       );
     },
+    keuangan: () => {
+      const filteredExpenses = filterByPeriod(expenses, keuanganPeriod);
+      const filteredIncomes = filterByPeriod(incomes, keuanganPeriod);
+      const totalExp = filteredExpenses.reduce((s, e) => s + e.amount, 0);
+      const totalInc = filteredIncomes.reduce((s, i) => s + i.amount, 0);
+      const kasirRev = filterByPeriod(
+        transactions.filter(t => t.tipe === "keluar" && (t.channel === "terjual" || t.channel === "event" || t.channel === "kol")),
+        keuanganPeriod
+      ).reduce((sum, t) => sum + (t.jumlah * t.harga), 0);
+      const totalRevenue = kasirRev + totalInc;
+
+      const subTabs = [
+        { id: "expense", label: "Pengeluaran", icon: "📤" },
+        { id: "income", label: "Pemasukan", icon: "📥" },
+        { id: "summary", label: "Ringkasan", icon: "📊" },
+        { id: "export", label: "Export", icon: "📁" },
+      ];
+
+      return (
+        <div style={{ maxWidth: 700, margin: "0 auto" }}>
+          {/* Sub-tab navigation */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
+            {subTabs.map(st => (
+              <button key={st.id} onClick={() => setKeuanganTab(st.id)}
+                style={{ flex: 1, minWidth: 70, padding: "10px 8px", background: keuanganTab === st.id ? COLORS.aqua : COLORS.brownDark,
+                  color: keuanganTab === st.id ? COLORS.brownDark : COLORS.cream, border: `1px solid ${keuanganTab === st.id ? COLORS.aqua : COLORS.brownLight}`,
+                  borderRadius: 8, fontWeight: keuanganTab === st.id ? 700 : 400, fontSize: 12, cursor: "pointer", textAlign: "center" }}>
+                <div style={{ fontSize: 16 }}>{st.icon}</div>
+                {st.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Period filter */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+            {["hari", "minggu", "bulan", "semua"].map(p => (
+              <button key={p} onClick={() => setKeuanganPeriod(p)}
+                style={{ padding: "6px 14px", background: keuanganPeriod === p ? COLORS.aqua : "transparent",
+                  color: keuanganPeriod === p ? COLORS.brownDark : COLORS.textMuted, border: `1px solid ${keuanganPeriod === p ? COLORS.aqua : COLORS.brownLight}`,
+                  borderRadius: 20, fontSize: 12, fontWeight: keuanganPeriod === p ? 700 : 400, cursor: "pointer", textTransform: "capitalize" }}>
+                {p}
+              </button>
+            ))}
+          </div>
+
+          {/* Quick stats bar */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 20 }}>
+            <div style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, textAlign: "center", border: `1px solid ${COLORS.brownLight}` }}>
+              <div style={{ fontSize: 11, color: COLORS.textMuted }}>Pemasukan</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.success }}>{fmt(totalRevenue)}</div>
+            </div>
+            <div style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, textAlign: "center", border: `1px solid ${COLORS.brownLight}` }}>
+              <div style={{ fontSize: 11, color: COLORS.textMuted }}>Pengeluaran</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.danger }}>{fmt(totalExp)}</div>
+            </div>
+            <div style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, textAlign: "center", border: `1px solid ${COLORS.brownLight}` }}>
+              <div style={{ fontSize: 11, color: COLORS.textMuted }}>Laba</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: totalRevenue - totalExp >= 0 ? COLORS.success : COLORS.danger }}>{fmt(totalRevenue - totalExp)}</div>
+            </div>
+          </div>
+
+          {/* ── EXPENSE TAB ── */}
+          {keuanganTab === "expense" && (
+            <div>
+              <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.brownLight}` }}>
+                <h3 style={{ color: COLORS.aqua, marginBottom: 12, fontSize: 15 }}>📤 Catat Pengeluaran</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Tanggal</label>
+                    <input type="date" value={expDate} onChange={e => setExpDate(e.target.value)}
+                      style={{ ...s.input, width: "100%" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Jumlah (Rp)</label>
+                    <input type="number" value={expAmount} onChange={e => setExpAmount(e.target.value)} placeholder="0"
+                      style={{ ...s.input, width: "100%" }} />
+                  </div>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Akun (Jurnal.id)</label>
+                  <select value={expAccount} onChange={e => setExpAccount(e.target.value)}
+                    style={{ ...s.input, width: "100%" }}>
+                    <option value="">— Pilih Akun —</option>
+                    <optgroup label="Cost of Sales">
+                      {JURNAL_ACCOUNTS.filter(a => a.group === "COGS").map(a => (
+                        <option key={a.code} value={a.code}>{a.code} — {a.name}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Selling Expenses">
+                      {JURNAL_ACCOUNTS.filter(a => a.group === "Selling").map(a => (
+                        <option key={a.code} value={a.code}>{a.code} — {a.name}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="General & Admin">
+                      {JURNAL_ACCOUNTS.filter(a => a.group === "G&A").map(a => (
+                        <option key={a.code} value={a.code}>{a.code} — {a.name}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Other">
+                      {JURNAL_ACCOUNTS.filter(a => a.group === "Other").map(a => (
+                        <option key={a.code} value={a.code}>{a.code} — {a.name}</option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Deskripsi</label>
+                  <input type="text" value={expDesc} onChange={e => setExpDesc(e.target.value)} placeholder="e.g. Bayar JNE, Meta Ads, Gaji Sasa..."
+                    style={{ ...s.input, width: "100%" }} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Metode Bayar</label>
+                    <select value={expPayMethod} onChange={e => setExpPayMethod(e.target.value)}
+                      style={{ ...s.input, width: "100%" }}>
+                      <option value="transfer">Transfer Bank</option>
+                      <option value="cash">Cash</option>
+                      <option value="ewallet">E-Wallet</option>
+                      <option value="cc">Kartu Kredit</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Penerima</label>
+                    <input type="text" value={expRecipient} onChange={e => setExpRecipient(e.target.value)} placeholder="Nama penerima"
+                      style={{ ...s.input, width: "100%" }} />
+                  </div>
+                </div>
+                <button onClick={addExpense}
+                  style={{ ...s.btn("primary"), width: "100%", marginTop: 12, padding: "11px 0", fontWeight: 700 }}>
+                  + Simpan Pengeluaran
+                </button>
+              </div>
+
+              {/* Expense list */}
+              <h3 style={{ color: COLORS.cream, marginBottom: 8, fontSize: 14 }}>Riwayat Pengeluaran ({filteredExpenses.length})</h3>
+              {filteredExpenses.length === 0 && <div style={{ color: COLORS.textMuted, fontSize: 13, textAlign: "center", padding: 30 }}>Belum ada data pengeluaran</div>}
+              {filteredExpenses.map(exp => (
+                <div key={exp.id} style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, marginBottom: 8, border: `1px solid ${COLORS.brownLight}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: COLORS.cream }}>{exp.account_name}</div>
+                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>{exp.date} · {exp.description || "-"}{exp.recipient ? ` → ${exp.recipient}` : ""}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontWeight: 700, color: COLORS.danger, fontSize: 14 }}>-{fmt(exp.amount)}</div>
+                    <button onClick={() => deleteExpense(exp.id)}
+                      style={{ background: "transparent", border: "none", color: COLORS.textMuted, fontSize: 10, cursor: "pointer", marginTop: 2 }}>hapus</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── INCOME TAB ── */}
+          {keuanganTab === "income" && (
+            <div>
+              <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.brownLight}` }}>
+                <h3 style={{ color: COLORS.aqua, marginBottom: 12, fontSize: 15 }}>📥 Catat Pemasukan (Non-Kasir)</h3>
+                <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 12 }}>Untuk pemasukan dari Marketplace, Consignment, B2B, dll. Penjualan via Kasir sudah otomatis ter-track.</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Tanggal</label>
+                    <input type="date" value={incDate} onChange={e => setIncDate(e.target.value)}
+                      style={{ ...s.input, width: "100%" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Jumlah (Rp)</label>
+                    <input type="number" value={incAmount} onChange={e => setIncAmount(e.target.value)} placeholder="0"
+                      style={{ ...s.input, width: "100%" }} />
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Sumber</label>
+                    <select value={incSource} onChange={e => { setIncSource(e.target.value); setIncChannel(""); }}
+                      style={{ ...s.input, width: "100%" }}>
+                      {INCOME_SOURCES.map(src => (
+                        <option key={src.id} value={src.id}>{src.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Channel</label>
+                    {INCOME_SOURCES.find(src => src.id === incSource)?.channels?.length > 0 ? (
+                      <select value={incChannel} onChange={e => setIncChannel(e.target.value)}
+                        style={{ ...s.input, width: "100%" }}>
+                        <option value="">— Pilih —</option>
+                        {INCOME_SOURCES.find(src => src.id === incSource).channels.map(ch => (
+                          <option key={ch} value={ch}>{ch}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input type="text" value={incChannel} onChange={e => setIncChannel(e.target.value)} placeholder="Nama toko / partner"
+                        style={{ ...s.input, width: "100%" }} />
+                    )}
+                  </div>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Deskripsi</label>
+                  <input type="text" value={incDesc} onChange={e => setIncDesc(e.target.value)} placeholder="e.g. Penjualan 10pcs via Shopee..."
+                    style={{ ...s.input, width: "100%" }} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Metode Bayar</label>
+                    <select value={incPayMethod} onChange={e => setIncPayMethod(e.target.value)}
+                      style={{ ...s.input, width: "100%" }}>
+                      <option value="transfer">Transfer Bank</option>
+                      <option value="cash">Cash</option>
+                      <option value="ewallet">E-Wallet</option>
+                      <option value="marketplace_balance">Saldo Marketplace</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Customer</label>
+                    <input type="text" value={incCustomer} onChange={e => setIncCustomer(e.target.value)} placeholder="Nama customer"
+                      style={{ ...s.input, width: "100%" }} />
+                  </div>
+                </div>
+                <button onClick={addIncome}
+                  style={{ ...s.btn("primary"), width: "100%", marginTop: 12, padding: "11px 0", fontWeight: 700 }}>
+                  + Simpan Pemasukan
+                </button>
+              </div>
+
+              {/* Income list */}
+              <h3 style={{ color: COLORS.cream, marginBottom: 8, fontSize: 14 }}>Riwayat Pemasukan Non-Kasir ({filteredIncomes.length})</h3>
+              <div style={{ background: COLORS.brownDark+"80", borderRadius: 10, padding: 10, marginBottom: 12, border: `1px dashed ${COLORS.brownLight}` }}>
+                <div style={{ fontSize: 11, color: COLORS.textMuted }}>💡 Penjualan via Kasir (periode ini):</div>
+                <div style={{ fontWeight: 700, color: COLORS.success, fontSize: 14 }}>{fmt(kasirRev)}</div>
+              </div>
+              {filteredIncomes.length === 0 && <div style={{ color: COLORS.textMuted, fontSize: 13, textAlign: "center", padding: 30 }}>Belum ada data pemasukan non-kasir</div>}
+              {filteredIncomes.map(inc => (
+                <div key={inc.id} style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, marginBottom: 8, border: `1px solid ${COLORS.brownLight}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: COLORS.cream }}>
+                      {inc.source === "marketplace" ? "🛒" : inc.source === "consignment" ? "🏪" : inc.source === "b2b" ? "🏢" : "💵"} {inc.source}{inc.channel ? ` — ${inc.channel}` : ""}
+                    </div>
+                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>{inc.date} · {inc.description || "-"}{inc.customer ? ` · ${inc.customer}` : ""}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontWeight: 700, color: COLORS.success, fontSize: 14 }}>+{fmt(inc.amount)}</div>
+                    <button onClick={() => deleteIncome(inc.id)}
+                      style={{ background: "transparent", border: "none", color: COLORS.textMuted, fontSize: 10, cursor: "pointer", marginTop: 2 }}>hapus</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── SUMMARY TAB ── */}
+          {keuanganTab === "summary" && (() => {
+            const byAccount = {};
+            filteredExpenses.forEach(e => {
+              if (!byAccount[e.account_code]) byAccount[e.account_code] = { name: e.account_name, total: 0, count: 0 };
+              byAccount[e.account_code].total += e.amount;
+              byAccount[e.account_code].count++;
+            });
+            const cogsTotal = filteredExpenses.filter(e => e.account_code.startsWith("5-")).reduce((s, e) => s + e.amount, 0);
+            const opexTotal = filteredExpenses.filter(e => e.account_code.startsWith("6-")).reduce((s, e) => s + e.amount, 0);
+            const otherExpTotal = filteredExpenses.filter(e => e.account_code.startsWith("8-")).reduce((s, e) => s + e.amount, 0);
+            const incBySrc = {};
+            filteredIncomes.forEach(i => {
+              const key = i.source;
+              if (!incBySrc[key]) incBySrc[key] = 0;
+              incBySrc[key] += i.amount;
+            });
+            const grossProfit = totalRevenue - cogsTotal;
+            const operatingProfit = grossProfit - opexTotal;
+            const netProfit = operatingProfit - otherExpTotal;
+
+            return (
+              <div>
+                <h3 style={{ color: COLORS.aqua, marginBottom: 12, fontSize: 15 }}>📊 Ringkasan P&L</h3>
+
+                <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.brownLight}` }}>
+                  {/* Revenue */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.aqua, marginBottom: 6, letterSpacing: 1 }}>PENDAPATAN</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13, color: COLORS.cream }}>
+                      <span>Penjualan (Kasir)</span><span>{fmt(kasirRev)}</span>
+                    </div>
+                    {Object.entries(incBySrc).map(([src, total]) => (
+                      <div key={src} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13, color: COLORS.cream }}>
+                        <span>{src === "marketplace" ? "Marketplace" : src === "consignment" ? "Consignment" : src === "b2b" ? "B2B Custom" : "Lainnya"}</span><span>{fmt(total)}</span>
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 14, fontWeight: 700, color: COLORS.success, borderTop: `1px solid ${COLORS.brownLight}`, marginTop: 4 }}>
+                      <span>Total Pendapatan</span><span>{fmt(totalRevenue)}</span>
+                    </div>
+                  </div>
+
+                  {/* COGS */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.aqua, marginBottom: 6, letterSpacing: 1 }}>HPP (COGS)</div>
+                    {Object.entries(byAccount).filter(([code]) => code.startsWith("5-")).sort((a,b) => a[0].localeCompare(b[0])).map(([code, d]) => (
+                      <div key={code} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0 4px 12px", fontSize: 12, color: COLORS.cream }}>
+                        <span style={{ color: COLORS.textMuted }}>{code}</span><span style={{ marginLeft: 8, flex: 1 }}>{d.name}</span><span>{fmt(d.total)}</span>
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13, fontWeight: 700, color: COLORS.warning, borderTop: `1px solid ${COLORS.brownLight}`, marginTop: 4 }}>
+                      <span>Laba Kotor</span><span>{fmt(grossProfit)}</span>
+                    </div>
+                  </div>
+
+                  {/* OpEx */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.aqua, marginBottom: 6, letterSpacing: 1 }}>BEBAN OPERASIONAL</div>
+                    {Object.entries(byAccount).filter(([code]) => code.startsWith("6-")).sort((a,b) => a[0].localeCompare(b[0])).map(([code, d]) => (
+                      <div key={code} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0 4px 12px", fontSize: 12, color: COLORS.cream }}>
+                        <span style={{ color: COLORS.textMuted }}>{code}</span><span style={{ marginLeft: 8, flex: 1 }}>{d.name}</span><span>{fmt(d.total)}</span>
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13, fontWeight: 700, color: COLORS.warning, borderTop: `1px solid ${COLORS.brownLight}`, marginTop: 4 }}>
+                      <span>Laba Operasional</span><span>{fmt(operatingProfit)}</span>
+                    </div>
+                  </div>
+
+                  {/* Other */}
+                  {otherExpTotal > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.aqua, marginBottom: 6, letterSpacing: 1 }}>BEBAN LAINNYA</div>
+                      {Object.entries(byAccount).filter(([code]) => code.startsWith("8-")).map(([code, d]) => (
+                        <div key={code} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0 4px 12px", fontSize: 12, color: COLORS.cream }}>
+                          <span style={{ color: COLORS.textMuted }}>{code}</span><span style={{ marginLeft: 8, flex: 1 }}>{d.name}</span><span>{fmt(d.total)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Net Profit */}
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", fontSize: 16, fontWeight: 800, color: netProfit >= 0 ? COLORS.success : COLORS.danger, borderTop: `2px solid ${COLORS.aqua}`, marginTop: 8 }}>
+                    <span>LABA BERSIH</span><span>{fmt(netProfit)}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ── EXPORT TAB ── */}
+          {keuanganTab === "export" && (
+            <div>
+              <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, border: `1px solid ${COLORS.brownLight}` }}>
+                <h3 style={{ color: COLORS.aqua, marginBottom: 8, fontSize: 15 }}>📁 Export ke Excel</h3>
+                <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Export data keuangan dalam format yang compatible dengan Jurnal.id. File Excel berisi 4 sheet: Journal entries, Detail Expense, Detail Income, dan P&L summary.</p>
+
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 6 }}>Periode export:</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.cream, textTransform: "capitalize" }}>{keuanganPeriod === "semua" ? "Semua Data" : keuanganPeriod === "bulan" ? "Bulan Ini" : keuanganPeriod === "minggu" ? "7 Hari Terakhir" : "Hari Ini"}</div>
+                  <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 4 }}>
+                    {filteredExpenses.length} pengeluaran · {filteredIncomes.length} pemasukan (non-kasir)
+                  </div>
+                </div>
+
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 12, color: COLORS.textMuted }}>
+                  <div style={{ fontWeight: 600, color: COLORS.cream, marginBottom: 4 }}>Sheet yang akan di-export:</div>
+                  <div>1. <strong style={{ color: COLORS.aqua }}>Journal</strong> — Format jurnal entry (Debit/Credit) siap import ke Jurnal.id</div>
+                  <div>2. <strong style={{ color: COLORS.aqua }}>Expenses</strong> — Detail semua pengeluaran</div>
+                  <div>3. <strong style={{ color: COLORS.aqua }}>Incomes</strong> — Detail pemasukan non-kasir</div>
+                  <div>4. <strong style={{ color: COLORS.aqua }}>P&L</strong> — Ringkasan laba rugi</div>
+                </div>
+
+                <button onClick={exportKeuanganExcel}
+                  style={{ ...s.btn("primary"), width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 800 }}>
+                  📥 Download Excel (Jurnal.id Format)
+                </button>
+              </div>
+
+              {/* SQL Setup info */}
+              <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginTop: 16, border: `1px solid ${COLORS.brownLight}` }}>
+                <h3 style={{ color: COLORS.aqua, marginBottom: 8, fontSize: 14 }}>🗄️ Setup Supabase (SQL)</h3>
+                <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>Jalankan SQL ini di Supabase SQL Editor untuk membuat tabel expenses & incomes:</p>
+                <pre style={{ background: COLORS.brown, borderRadius: 8, padding: 10, fontSize: 10, color: COLORS.cream, overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+{`CREATE TABLE IF NOT EXISTS expenses (
+  id bigint PRIMARY KEY,
+  date date NOT NULL DEFAULT current_date,
+  account_code text NOT NULL,
+  account_name text NOT NULL,
+  description text,
+  amount bigint NOT NULL DEFAULT 0,
+  payment_method text DEFAULT 'transfer',
+  recipient text,
+  created_at timestamptz DEFAULT now()
+);
+ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "anon_all_expenses" ON expenses
+  FOR ALL USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS incomes (
+  id bigint PRIMARY KEY,
+  date date NOT NULL DEFAULT current_date,
+  source text NOT NULL DEFAULT 'marketplace',
+  channel text,
+  description text,
+  amount bigint NOT NULL DEFAULT 0,
+  payment_method text DEFAULT 'transfer',
+  customer text,
+  created_at timestamptz DEFAULT now()
+);
+ALTER TABLE incomes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "anon_all_incomes" ON incomes
+  FOR ALL USING (true) WITH CHECK (true);`}
+                </pre>
+                <button onClick={() => { navigator.clipboard.writeText(`CREATE TABLE IF NOT EXISTS expenses (\n  id bigint PRIMARY KEY,\n  date date NOT NULL DEFAULT current_date,\n  account_code text NOT NULL,\n  account_name text NOT NULL,\n  description text,\n  amount bigint NOT NULL DEFAULT 0,\n  payment_method text DEFAULT 'transfer',\n  recipient text,\n  created_at timestamptz DEFAULT now()\n);\nALTER TABLE expenses ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "anon_all_expenses" ON expenses\n  FOR ALL USING (true) WITH CHECK (true);\n\nCREATE TABLE IF NOT EXISTS incomes (\n  id bigint PRIMARY KEY,\n  date date NOT NULL DEFAULT current_date,\n  source text NOT NULL DEFAULT 'marketplace',\n  channel text,\n  description text,\n  amount bigint NOT NULL DEFAULT 0,\n  payment_method text DEFAULT 'transfer',\n  customer text,\n  created_at timestamptz DEFAULT now()\n);\nALTER TABLE incomes ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "anon_all_incomes" ON incomes\n  FOR ALL USING (true) WITH CHECK (true);`); showToast("✓ SQL disalin ke clipboard!"); }}
+                  style={{ ...s.btn("primary"), marginTop: 8, fontSize: 12, padding: "8px 16px" }}>
+                  📋 Copy SQL
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    },
   };
 
   const currentPage = pages[page];
@@ -3286,7 +3946,7 @@ END $$;`;
     dashboard: "Dashboard", scan: "Quick Scan ⚡", stok: "Cek Stok", masuk: "Barang Masuk", keluar: "Barang Keluar",
     rusak: "Rusak / Hilang", pinjam: "Peminjaman", laporan: "Laporan",
     label: "Cetak Label Barcode", data: "Import Data", ai: "Tanya AI ✦", settings: "Pengaturan ⚙",
-    kasir: "Kasir 🛒"
+    kasir: "Kasir 🛒", keuangan: "Keuangan 💰"
   };
 
   return (
@@ -3352,6 +4012,7 @@ END $$;`;
             { id: "masuk", icon: "↓", label: "Masuk" },
             { id: "laporan", icon: "≡", label: "Laporan" },
             { id: "kasir", icon: "🛒", label: "Kasir" },
+            { id: "keuangan", icon: "💰", label: "Keuangan" },
             { id: "settings", icon: "⚙", label: "Lainnya" },
           ].map(item => (
             <div key={item.id} onClick={() => setPage(item.id)}
