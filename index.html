@@ -304,11 +304,13 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
         <>
           <div style={s.formGroup}>
             <label style={s.label}>Channel Keluar</label>
-            <div style={{ display: "flex", gap: 8 }}>
-              {[["terjual", "🛒 Terjual"], ["kol", "📱 KOL"], ["event", "🎪 Event"]].map(([val, lbl]) => (
-                <button key={val} onClick={() => set("channel", val)} style={{ ...s.btn(form.channel === val ? "primary" : "secondary"), flex: 1, fontSize: 12 }}>{lbl}</button>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {[["terjual","🛒","Direct Online"],["shopee","🟠","Shopee"],["tokopedia","🟢","Tokopedia"],["tiktok","⬛","TikTok"],["event","🎪","Event/Bazaar"],["consignment","🏪","Consignment"],["b2b","🏢","B2B"],["kol","📱","KOL"]].map(([val, icon, lbl]) => (
+                <button key={val} onClick={() => set("channel", val)} style={{ ...s.btn(form.channel === val ? "primary" : "secondary"), fontSize: 11, padding: "6px 10px", whiteSpace: "nowrap" }}>{icon} {lbl}</button>
               ))}
             </div>
+            {form.channel === "kol" && <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 6 }}>📱 KOL: stok keluar dicatat, tidak generate income (marketing expense)</div>}
+            {(form.channel === "consignment" || form.channel === "b2b") && <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6 }}>💡 {form.channel === "consignment" ? "Consignment" : "B2B"}: income akan tercatat otomatis, payment via invoice terpisah</div>}
           </div>
           <div style={s.formGroup}>
             <label style={s.label}>Shipping</label>
@@ -920,6 +922,47 @@ function PlaiInventory() {
     } catch(e) { console.error('sbDeleteTx error:', e); }
   };
 
+  const sbInsertIncome = async (inc) => {
+    if (!sbClient) return;
+    try {
+      const { error } = await sbClient.from('incomes').insert(inc);
+      if (error) { console.error('sbInsertIncome error:', error); }
+      else {
+        const { data } = await sbClient.from('incomes').select('*').order('id', { ascending: false });
+        if (data) setIncomes(data);
+      }
+    } catch(e) { console.error('sbInsertIncome error:', e); }
+  };
+
+  // Channel → Jurnal.id source & revenue account mapping
+  const CHANNEL_SOURCE_MAP = {
+    terjual: "b2c_direct", direct: "b2c_direct",
+    shopee: "marketplace", tokopedia: "marketplace", tiktok: "marketplace",
+    event: "event",
+    consignment: "consignment",
+    b2b: "b2b"
+    // kol: intentionally omitted — no income, creates expense only
+  };
+  const CHANNEL_REVENUE_MAP = {
+    terjual: "4-40000", direct: "4-40000",
+    shopee: "4-40003", tokopedia: "4-40003", tiktok: "4-40003",
+    event: "4-40002",
+    consignment: "4-40004",
+    b2b: "4-40005"
+  };
+  const CHANNEL_LABELS = {
+    terjual: "Direct Online", direct: "Direct Online",
+    shopee: "Shopee", tokopedia: "Tokopedia", tiktok: "TikTok",
+    event: "Event/Bazaar", kol: "KOL",
+    consignment: "Consignment", b2b: "B2B"
+  };
+  const CHANNEL_COLORS = {
+    terjual: "#4ECDC4", direct: "#4ECDC4",
+    shopee: "#FF6B35", tokopedia: "#45B649",
+    tiktok: "#FF0050", event: "#F7DC6F",
+    kol: "#F0A500", consignment: "#9B59B6", b2b: "#3498DB"
+  };
+
   // Delete transaction + revert stock + revert shipping expense
   const [deleteTxConfirm, setDeleteTxConfirm] = useState(null);
 
@@ -972,6 +1015,32 @@ function PlaiInventory() {
     showToast(`✓ Barang keluar ${data.nama} -${data.jumlah} dicatat`);
     sbUpsertInventory(data.sku, newStok);
     sbInsertTx(tx);
+
+    // Auto-create income record for revenue-generating channels
+    const source = CHANNEL_SOURCE_MAP[data.channel];
+    if (source) {
+      const ts = Date.now();
+      const dateStr = (data.tanggal || new Date().toISOString().split("T")[0]).replace(/-/g, "");
+      const harga = item?.harga || 0;
+      const incomeAmount = harga * data.jumlah + (data.pelangganShipCost || 0);
+      const inc = {
+        id: ts,
+        date: data.tanggal || new Date().toISOString().split("T")[0],
+        income_number: `INC-${dateStr}-${String(ts).slice(-4)}`,
+        source,
+        revenue_account_code: CHANNEL_REVENUE_MAP[data.channel],
+        channel: data.channel,
+        description: `Penjualan ${data.nama} x${data.jumlah}${data.catatan ? " — " + data.catatan : ""}`,
+        amount: incomeAmount,
+        payment_method: "transfer",
+        customer: data.customer || "",
+        pay_to_account_code: "1-10002-2",
+        invoice_number: null,
+        source_type: source
+      };
+      setIncomes(prev => [inc, ...prev]);
+      sbInsertIncome(inc);
+    }
   };
 
   // ── quick scan handlers ──────────────────────────────────────────────────
@@ -1536,6 +1605,16 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
       return d;
     };
+    // Helper: map source to revenue account code (Jurnal.id COA)
+    const revenueAccCode = (i) => {
+      if (i.revenue_account_code) return i.revenue_account_code;
+      const s = (i.source || "").toLowerCase();
+      if (s === "event") return "4-40002";
+      if (s === "marketplace") return "4-40003";
+      if (s === "consignment") return "4-40004";
+      if (s === "b2b") return "4-40005";
+      return "4-40000"; // default: Direct Online
+    };
 
     // ── SHEET 1: Expense Import (Jurnal.id format) ──
     const expImportRows = [
@@ -1575,7 +1654,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
         fmtPayMethod(i.payment_method),
         "",
         "",
-        i.channel || ""
+        [revenueAccCode(i), i.channel || ""].filter(Boolean).join(";")
       ])
     ];
     const ws2 = XLSX.utils.aoa_to_sheet(rpRows);
@@ -1593,11 +1672,11 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
 
     // ── SHEET 4: Raw Incomes (internal reference) ──
     const incRows = [
-      ["Tanggal", "No. Income", "Sumber", "Channel", "Deskripsi", "Jumlah", "Metode Bayar", "Customer", "Pay To Account"],
-      ...filteredInc.map(i => [i.date, incNum(i), i.source, i.channel, i.description, i.amount, i.payment_method, i.customer, i.pay_to_account_code || fromAccCode(i.payment_method)])
+      ["Tanggal", "No. Income", "Sumber", "Channel", "Revenue Account", "Deskripsi", "Jumlah", "Metode Bayar", "Customer", "Pay To Account"],
+      ...filteredInc.map(i => [i.date, incNum(i), i.source, i.channel, revenueAccCode(i), i.description, i.amount, i.payment_method, i.customer, i.pay_to_account_code || fromAccCode(i.payment_method)])
     ];
     const ws4 = XLSX.utils.aoa_to_sheet(incRows);
-    ws4["!cols"] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 16 }];
+    ws4["!cols"] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 16 }];
     XLSX.utils.book_append_sheet(wb, ws4, "Incomes");
 
     const totalExpByAccount = {};
@@ -2320,11 +2399,16 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
               <div style={s.grid2}>
                 <div style={s.formGroup}>
                   <label style={s.label}>Channel</label>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    {[["terjual", "🛒"], ["kol", "📱"], ["event", "🎪"]].map(([val, icon]) => (
-                      <button key={val} onClick={() => setInvoiceChannel(val)} style={{ ...s.btn(invoiceChannel === val ? "primary" : "secondary"), flex: 1, fontSize: 11, padding: "6px 4px" }}>{icon}</button>
-                    ))}
-                  </div>
+                  <select style={s.select} value={invoiceChannel} onChange={e => setInvoiceChannel(e.target.value)}>
+                    <option value="terjual">🛒 Direct Online</option>
+                    <option value="shopee">🟠 Shopee</option>
+                    <option value="tokopedia">🟢 Tokopedia</option>
+                    <option value="tiktok">⬛ TikTok</option>
+                    <option value="event">🎪 Event/Bazaar</option>
+                    <option value="consignment">🏪 Consignment</option>
+                    <option value="b2b">🏢 B2B</option>
+                    <option value="kol">📱 KOL</option>
+                  </select>
                 </div>
                 <div style={s.formGroup}>
                   <label style={s.label}>Shipping</label>
@@ -2419,7 +2503,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                   <td style={s.td}>{t.nama}</td>
                   <td style={{ ...s.td, color: COLORS.danger, fontWeight: 600 }}>-{t.jumlah}</td>
                   <td style={{ ...s.td, fontSize: 11 }}>{t.harga ? `Rp ${t.harga.toLocaleString("id-ID")}` : "-"}</td>
-                  <td style={s.td}><span style={{ ...s.badge(t.channel === "terjual" ? COLORS.aqua : t.channel === "kol" ? COLORS.warning : COLORS.success), color: COLORS.brownDark }}>{t.channel === "terjual" ? "Terjual" : t.channel === "kol" ? "KOL" : "Event"}</span></td>
+                  <td style={s.td}><span style={{ ...s.badge(CHANNEL_COLORS[t.channel] || COLORS.aqua), color: COLORS.brownDark }}>{CHANNEL_LABELS[t.channel] || t.channel}</span></td>
                   <td style={s.td}>
                     {t.shipping === "plai"
                       ? <span style={{ color: COLORS.danger, fontSize: 12, fontWeight: 600 }}>💸 Rp {(t.shippingCost || 0).toLocaleString("id-ID")}</span>
@@ -2508,7 +2592,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       const totalRevenueBruto = filteredTx.filter(t => t.tipe === "keluar").reduce((a, t) => a + (t.harga || 0) * t.jumlah, 0);
       const totalDiskon = filteredTx.filter(t => t.tipe === "keluar").reduce((a, t) => a + (t.diskon || 0), 0);
       const totalRevenue = totalRevenueBruto - totalDiskon;
-      const chFiltered = { terjual: filteredTx.filter(t => t.tipe === "keluar" && t.channel === "terjual").reduce((a, t) => a + t.jumlah, 0), kol: filteredTx.filter(t => t.tipe === "keluar" && t.channel === "kol").reduce((a, t) => a + t.jumlah, 0), event: filteredTx.filter(t => t.tipe === "keluar" && t.channel === "event").reduce((a, t) => a + t.jumlah, 0) };
+      const chFiltered = Object.fromEntries(["terjual","direct","shopee","tokopedia","tiktok","event","consignment","b2b","kol"].map(ch => [ch, filteredTx.filter(t => t.tipe === "keluar" && t.channel === ch).reduce((a, t) => a + t.jumlah, 0)]));
       const shippingExpense = filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "plai").reduce((a, t) => a + (t.shippingCost || 0), 0);
       const shippingExpenseList = filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "plai");
       const pelangganShipRevenue = filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "pelanggan").reduce((a, t) => a + (t.pelangganShipCost || 0), 0);
@@ -2718,7 +2802,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                         <tr key={t.id}>
                           <td style={s.td}>{t.tanggal}</td>
                           <td style={s.td}>{t.nama}</td>
-                          <td style={s.td}><span style={{ ...s.badge(t.channel === "terjual" ? COLORS.aqua : t.channel === "kol" ? COLORS.warning : COLORS.success), color: COLORS.brownDark, fontSize: 10 }}>{t.channel}</span></td>
+                          <td style={s.td}><span style={{ ...s.badge(CHANNEL_COLORS[t.channel] || COLORS.aqua), color: COLORS.brownDark, fontSize: 10 }}>{CHANNEL_LABELS[t.channel] || t.channel}</span></td>
                           <td style={{ ...s.td, color: COLORS.danger, fontWeight: 600 }}>Rp {(t.shippingCost || 0).toLocaleString("id-ID")}</td>
                         </tr>
                       ))}
@@ -2751,7 +2835,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                       <td style={{ ...s.td, fontWeight: 600, color: t.tipe === "masuk" ? COLORS.success : COLORS.danger }}>{t.tipe === "masuk" ? "+" : "-"}{t.jumlah}</td>
                       <td style={{ ...s.td, fontSize: 11 }}>{t.harga ? `Rp ${t.harga.toLocaleString("id-ID")}` : "-"}</td>
                       <td style={{ ...s.td, fontSize: 11, color: t.diskon ? COLORS.warning : COLORS.textMuted, fontWeight: t.diskon ? 600 : 400 }}>{t.diskon ? `−Rp ${t.diskon.toLocaleString("id-ID")}` : "-"}</td>
-                      <td style={s.td}>{t.channel && t.channel !== "-" ? <span style={{ ...s.badge(t.channel === "terjual" ? COLORS.aqua : t.channel === "kol" ? COLORS.warning : COLORS.success), color: COLORS.brownDark, fontSize: 10 }}>{t.channel}</span> : "-"}</td>
+                      <td style={s.td}>{t.channel && t.channel !== "-" ? <span style={{ ...s.badge(CHANNEL_COLORS[t.channel] || COLORS.aqua), color: COLORS.brownDark, fontSize: 10 }}>{CHANNEL_LABELS[t.channel] || t.channel}</span> : "-"}</td>
                       <td style={s.td}>
                         {t.shipping === "plai" ? <span style={{ color: COLORS.danger, fontSize: 11 }}>💸 Rp {(t.shippingCost||0).toLocaleString("id-ID")}</span>
                           : t.shipping === "pelanggan" ? <span style={{ fontSize: 11, color: COLORS.textMuted }}>📦{t.marketplace ? " MP" : ""}{t.pelangganShipCost > 0 ? ` ${t.pelangganShipCost.toLocaleString("id-ID")}` : ""}</span>
