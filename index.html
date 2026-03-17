@@ -1710,9 +1710,9 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       [],
       ["LABA / (RUGI)", (kasirRevenue + filteredInc.reduce((s, i) => s + i.amount, 0)) - filteredExp.reduce((s, e) => s + e.amount, 0)],
     ];
-    const ws4 = XLSX.utils.aoa_to_sheet(plRows);
-    ws4["!cols"] = [{ wch: 35 }, { wch: 18 }];
-    XLSX.utils.book_append_sheet(wb, ws4, "P&L");
+    const ws5 = XLSX.utils.aoa_to_sheet(plRows);
+    ws5["!cols"] = [{ wch: 35 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws5, "P&L");
 
     const dateStr = new Date().toISOString().split("T")[0];
     const periodLabel = keuanganPeriod === "semua" ? "AllPeriod" : keuanganPeriod;
