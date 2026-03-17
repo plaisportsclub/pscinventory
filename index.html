@@ -1513,56 +1513,92 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
 
   const exportKeuanganExcel = () => {
     const wb = XLSX.utils.book_new();
-    const journalRows = [
-      ["Plai Sports Club"],
-      ["Journal Import"],
-      [`Period: ${keuanganPeriod === "semua" ? "All" : keuanganPeriod}`],
-      ["(in IDR)"],
-      [],
-      ["Account Number", "Account", "Description", "Debit", "Credit"],
-    ];
-
     const filteredExp = filterByPeriod(expenses, keuanganPeriod);
     const filteredInc = filterByPeriod(incomes, keuanganPeriod);
 
-    filteredExp.forEach(exp => {
-      const payAcc = exp.payment_method === "cash" ? "1-10001" : "1-10002-2";
-      const payName = exp.payment_method === "cash" ? "Cash" : "BCA - Gaby";
-      journalRows.push([]);
-      journalRows.push([null, `Expense | ${exp.date}`, null, null, null]);
-      journalRows.push([exp.account_code, exp.account_name, exp.description || "", exp.amount, 0]);
-      journalRows.push([payAcc, payName, exp.description || "", 0, exp.amount]);
-    });
+    // Helper: format payment method for Jurnal.id
+    const fmtPayMethod = (m) => {
+      if (!m) return "Transfer";
+      if (m === "cash" || m === "tunai") return "Cash";
+      if (m === "ewallet" || m === "gopay" || m === "ovo" || m === "dana") return "Cash";
+      return "Transfer";
+    };
+    // Helper: from account code
+    const fromAccCode = (m) => (m === "cash" || m === "tunai" || m === "ewallet") ? "1-10001" : "1-10002-2";
+    // Helper: generate expense number from existing or fallback
+    const expNum = (e) => e.expense_number || `EXP-${(e.date || "").replace(/-/g, "").substring(0, 8)}-${String(e.id || "").slice(-4)}`;
+    // Helper: generate income number
+    const incNum = (i) => i.income_number || `INC-${(i.date || "").replace(/-/g, "").substring(0, 8)}-${String(i.id || "").slice(-4)}`;
+    // Helper: format date DD/MM/YYYY for Jurnal.id
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const parts = d.split("-");
+      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      return d;
+    };
 
-    filteredInc.forEach(inc => {
-      const payAcc = inc.payment_method === "cash" ? "1-10001" : "1-10002-2";
-      const payName = inc.payment_method === "cash" ? "Cash" : "BCA - Gaby";
-      const srcLabel = inc.source === "marketplace" ? `Marketplace${inc.channel ? " - " + inc.channel : ""}` : inc.source === "consignment" ? "Consignment" : inc.source === "b2b" ? "B2B Custom" : "Other";
-      journalRows.push([]);
-      journalRows.push([null, `Income (${srcLabel}) | ${inc.date}`, null, null, null]);
-      journalRows.push([payAcc, payName, inc.description || "", inc.amount, 0]);
-      journalRows.push(["4-40000", "Revenues - Products", `${srcLabel}: ${inc.description || ""}`, 0, inc.amount]);
-    });
+    // ── SHEET 1: Expense Import (Jurnal.id format) ──
+    const expImportRows = [
+      ["*FromAccountNumber", "Beneficiery", "Address", "*ExpenseDate", "*ExpenseNumber", "*PaymentMethod", "*ExpenseAccount", "Description", "TaxName", "TaxRate", "*Amount", "#PayLater?(yes/no)", "#DueDate", "Tags"],
+      ...filteredExp.map(e => [
+        fromAccCode(e.payment_method),
+        e.recipient || "",
+        "",
+        fmtDate(e.date),
+        expNum(e),
+        fmtPayMethod(e.payment_method),
+        e.account_code || "",
+        e.description || "",
+        "",
+        "",
+        e.amount || 0,
+        "no",
+        "",
+        ""
+      ])
+    ];
+    const ws1 = XLSX.utils.aoa_to_sheet(expImportRows);
+    ws1["!cols"] = [{ wch: 20 }, { wch: 25 }, { wch: 10 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 40 }, { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, ws1, "Expense Import");
 
-    const ws1 = XLSX.utils.aoa_to_sheet(journalRows);
-    ws1["!cols"] = [{ wch: 14 }, { wch: 30 }, { wch: 40 }, { wch: 15 }, { wch: 15 }];
-    XLSX.utils.book_append_sheet(wb, ws1, "Journal");
+    // ── SHEET 2: Receive Payment Import (Jurnal.id format) ──
+    // Only for marketplace & b2c_direct incomes
+    const rpIncomes = filteredInc.filter(i => i.source === "marketplace" || i.source === "b2c_direct" || i.source === "other" || !i.source);
+    const rpRows = [
+      ["*Payment Date", "*Payment Number", "*Invoice Number", "*Pay to account (Code)", "*Amount", "*PaymentMethod", "WitholdingAccountCode", "WitholdingAmount(value or %)", "Tags(use ; to separate tags)"],
+      ...rpIncomes.map(i => [
+        fmtDate(i.date),
+        incNum(i),
+        i.invoice_number || "",
+        i.pay_to_account_code || fromAccCode(i.payment_method),
+        i.amount || 0,
+        fmtPayMethod(i.payment_method),
+        "",
+        "",
+        i.channel || ""
+      ])
+    ];
+    const ws2 = XLSX.utils.aoa_to_sheet(rpRows);
+    ws2["!cols"] = [{ wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 24 }, { wch: 20 }];
+    XLSX.utils.book_append_sheet(wb, ws2, "Receive Payment Import");
 
+    // ── SHEET 3: Raw Expenses (internal reference) ──
     const expRows = [
-      ["Tanggal", "Kode Akun", "Nama Akun", "Deskripsi", "Jumlah", "Metode Bayar", "Penerima"],
-      ...filteredExp.map(e => [e.date, e.account_code, e.account_name, e.description, e.amount, e.payment_method, e.recipient])
+      ["Tanggal", "No. Expense", "From Account", "Kode Akun", "Nama Akun", "Deskripsi", "Jumlah", "Metode Bayar", "Penerima"],
+      ...filteredExp.map(e => [e.date, expNum(e), fromAccCode(e.payment_method), e.account_code, e.account_name, e.description, e.amount, e.payment_method, e.recipient])
     ];
-    const ws2 = XLSX.utils.aoa_to_sheet(expRows);
-    ws2["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 28 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }];
-    XLSX.utils.book_append_sheet(wb, ws2, "Expenses");
+    const ws3 = XLSX.utils.aoa_to_sheet(expRows);
+    ws3["!cols"] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 28 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }];
+    XLSX.utils.book_append_sheet(wb, ws3, "Expenses");
 
+    // ── SHEET 4: Raw Incomes (internal reference) ──
     const incRows = [
-      ["Tanggal", "Sumber", "Channel", "Deskripsi", "Jumlah", "Metode Bayar", "Customer"],
-      ...filteredInc.map(i => [i.date, i.source, i.channel, i.description, i.amount, i.payment_method, i.customer])
+      ["Tanggal", "No. Income", "Sumber", "Channel", "Deskripsi", "Jumlah", "Metode Bayar", "Customer", "Pay To Account"],
+      ...filteredInc.map(i => [i.date, incNum(i), i.source, i.channel, i.description, i.amount, i.payment_method, i.customer, i.pay_to_account_code || fromAccCode(i.payment_method)])
     ];
-    const ws3 = XLSX.utils.aoa_to_sheet(incRows);
-    ws3["!cols"] = [{ wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }];
-    XLSX.utils.book_append_sheet(wb, ws3, "Incomes");
+    const ws4 = XLSX.utils.aoa_to_sheet(incRows);
+    ws4["!cols"] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, ws4, "Incomes");
 
     const totalExpByAccount = {};
     filteredExp.forEach(e => {
@@ -1600,7 +1636,8 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     XLSX.utils.book_append_sheet(wb, ws4, "P&L");
 
     const dateStr = new Date().toISOString().split("T")[0];
-    XLSX.writeFile(wb, `Plai_Keuangan_${dateStr}.xlsx`);
+    const periodLabel = keuanganPeriod === "semua" ? "AllPeriod" : keuanganPeriod;
+    XLSX.writeFile(wb, `Plai_JurnalID_${periodLabel}_${dateStr}.xlsx`);
     showToast("✓ Excel exported!");
   };
 
