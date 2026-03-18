@@ -207,9 +207,9 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
     if (!form.sku || form.jumlah < 1) return showToast("Pilih barang dan jumlah dulu!", "danger");
     if (tipe !== "masuk" && selected && form.jumlah > selected.stok) return showToast("Stok tidak cukup!", "danger");
     if (tipe === "keluar" && form.shipping === "plai" && (!form.shippingCost || form.shippingCost <= 0)) return showToast("Isi biaya shipping Plai dulu!", "danger");
-    if (tipe === "keluar" && isMkt(form.channel) && (!form.mktHarga || parseInt(form.mktHarga) <= 0)) return showToast("Isi harga jual marketplace dulu!", "danger");
-    const pelangganShipCostVal = form.shipping === "pelanggan" && !form.marketplace ? parseInt(form.pelangganShipCost) || 0 : 0;
-    onSubmit({ sku: form.sku, jumlah: parseInt(form.jumlah), channel: form.channel, shipping: form.shipping, shippingCost: form.shipping === "plai" ? parseInt(form.shippingCost) : 0, pelangganShipCost: pelangganShipCostVal, marketplace: form.marketplace || false, catatan: (form.marketplace ? (form.catatan ? form.catatan + " — Marketplace" : "Marketplace") : form.catatan), staff: form.staff, peminjam: form.peminjam || "", nama: selected?.nama || "", tanggal: form.tanggal || todayStr, mktHarga: isMkt(form.channel) ? parseInt(form.mktHarga) || 0 : 0, mktOrderNo: form.mktOrderNo || "", mktOngkir: isMkt(form.channel) ? parseInt(form.mktOngkir) || 0 : 0 });
+    if (tipe === "keluar" && isMkt(form.channel) && (!form.mktHarga || parseRp(form.mktHarga) <= 0)) return showToast("Isi harga jual marketplace dulu!", "danger");
+    const pelangganShipCostVal = form.shipping === "pelanggan" && !form.marketplace ? parseRp(form.pelangganShipCost) || 0 : 0;
+    onSubmit({ sku: form.sku, jumlah: parseInt(form.jumlah), channel: form.channel, shipping: form.shipping, shippingCost: form.shipping === "plai" ? parseRp(form.shippingCost) : 0, pelangganShipCost: pelangganShipCostVal, marketplace: form.marketplace || false, catatan: (form.marketplace ? (form.catatan ? form.catatan + " — Marketplace" : "Marketplace") : form.catatan), staff: form.staff, peminjam: form.peminjam || "", nama: selected?.nama || "", tanggal: form.tanggal || todayStr, mktHarga: isMkt(form.channel) ? parseRp(form.mktHarga) || 0 : 0, mktOrderNo: form.mktOrderNo || "", mktOngkir: isMkt(form.channel) ? parseRp(form.mktOngkir) || 0 : 0 });
     setForm({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: new Date().toISOString().split("T")[0], mktHarga: "", mktOrderNo: "", mktOngkir: "" });
     setScanInput("");
   };
@@ -336,8 +336,8 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
               </div>
               {form.mktHarga > 0 && (
                 <div style={{ marginTop: 8, fontSize: 11, color: COLORS.textMuted, background: COLORS.brown, borderRadius: 6, padding: "6px 10px" }}>
-                  Fee marketplace 10%: <span style={{ color: COLORS.danger }}>-Rp {(parseInt(form.mktHarga) * parseInt(form.jumlah) * 0.1).toLocaleString("id-ID")}</span>
-                  {" · "}Estimasi net: <span style={{ color: COLORS.success }}>Rp {(parseInt(form.mktHarga) * parseInt(form.jumlah) * 0.9 + (parseInt(form.mktOngkir)||0)).toLocaleString("id-ID")}</span>
+                  Fee marketplace 10%: <span style={{ color: COLORS.danger }}>-Rp {(parseRp(form.mktHarga) * parseInt(form.jumlah) * 0.1).toLocaleString("id-ID")}</span>
+                  {" · "}Estimasi net: <span style={{ color: COLORS.success }}>Rp {(parseRp(form.mktHarga) * parseInt(form.jumlah) * 0.9 + (parseRp(form.mktOngkir)||0)).toLocaleString("id-ID")}</span>
                 </div>
               )}
             </div>
@@ -407,7 +407,7 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
           {tipe !== "masuk" && form.jumlah > 0 && <> → setelah: <span style={{ color: COLORS.cream, fontWeight: 700 }}>{Math.max(0, selected.stok - form.jumlah)} {selected.satuan}</span></>}
           {tipe === "masuk" && form.jumlah > 0 && <> → setelah: <span style={{ color: COLORS.success, fontWeight: 700 }}>{selected.stok + parseInt(form.jumlah)} {selected.satuan}</span></>}
           {tipe === "keluar" && form.shipping === "plai" && form.shippingCost > 0 && (
-            <> · Shipping expense: <span style={{ color: COLORS.danger, fontWeight: 700 }}>Rp {parseInt(form.shippingCost).toLocaleString("id-ID")}</span></>
+            <> · Shipping expense: <span style={{ color: COLORS.danger, fontWeight: 700 }}>Rp {parseRp(form.shippingCost).toLocaleString("id-ID")}</span></>
           )}
         </div>
       )}
@@ -1119,7 +1119,7 @@ function PlaiInventory() {
   const confirmQuickScan = () => {
     if (!scanResult || scanJumlah < 1) return showToast("Isi jumlah dulu!", "danger");
     if (scanMode === "keluar" && scanJumlah > scanResult.stok) return showToast("Stok tidak cukup!", "danger");
-    if (scanMode === "keluar" && scanShipping === "plai" && (!scanShipCost || parseInt(scanShipCost) <= 0)) return showToast("Isi biaya shipping dulu!", "danger");
+    if (scanMode === "keluar" && scanShipping === "plai" && (!scanShipCost || parseRp(scanShipCost) <= 0)) return showToast("Isi biaya shipping dulu!", "danger");
     const currentStok = inventory.find(i => i.sku === scanResult.sku)?.stok ?? scanResult.stok;
     const data = {
       sku: scanResult.sku,
@@ -1127,8 +1127,8 @@ function PlaiInventory() {
       jumlah: parseInt(scanJumlah),
       channel: scanMode === "keluar" ? scanChannel : "-",
       shipping: scanMode === "keluar" ? scanShipping : "none",
-      shippingCost: scanMode === "keluar" && scanShipping === "plai" ? parseInt(scanShipCost) : 0,
-      pelangganShipCost: scanMode === "keluar" && scanShipping === "pelanggan" && !scanMarketplace ? parseInt(scanPelangganShipCost) || 0 : 0,
+      shippingCost: scanMode === "keluar" && scanShipping === "plai" ? parseRp(scanShipCost) : 0,
+      pelangganShipCost: scanMode === "keluar" && scanShipping === "pelanggan" && !scanMarketplace ? parseRp(scanPelangganShipCost) || 0 : 0,
       marketplace: scanMarketplace,
       catatan: scanMarketplace ? "Marketplace" : "",
       staff: scanStaff,
@@ -1212,17 +1212,17 @@ function PlaiInventory() {
     const subtotal = cart.reduce((a, c) => a + c.harga * c.qty, 0);
     const diskonNilai = kasirDiskonTipe === "persen"
       ? Math.round(subtotal * (parseFloat(kasirDiskonNilai) || 0) / 100)
-      : (parseInt(kasirDiskonNilai) || 0);
+      : (parseRp(kasirDiskonNilai) || 0);
     const total = Math.max(0, subtotal - diskonNilai);
-    const bayar = parseInt(kasirBayar) || 0;
+    const bayar = parseRp(kasirBayar) || 0;
     if (kasirPayMethod === "cash" && bayar < total) return showToast("Uang bayar kurang!", "danger");
-    if (kasirShipping === "plai" && (!kasirShipCost || parseInt(kasirShipCost) <= 0)) return showToast("Isi biaya shipping Plai dulu!", "danger");
+    if (kasirShipping === "plai" && (!kasirShipCost || parseRp(kasirShipCost) <= 0)) return showToast("Isi biaya shipping Plai dulu!", "danger");
 
     // Deduct stock + record each item as keluar transaction
     // Generate invoice ID for grouping & split discount evenly across items
     const invoiceId = kasirInvoiceManual.trim() ? kasirInvoiceManual.trim() : "INV-" + Date.now();
-    const shipCostInt = kasirShipping === "plai" ? parseInt(kasirShipCost) || 0 : 0;
-    const pelangganShipCostInt = kasirShipping === "pelanggan" && !kasirMarketplace ? parseInt(kasirPelangganShipCost) || 0 : 0;
+    const shipCostInt = kasirShipping === "plai" ? parseRp(kasirShipCost) || 0 : 0;
+    const pelangganShipCostInt = kasirShipping === "pelanggan" && !kasirMarketplace ? parseRp(kasirPelangganShipCost) || 0 : 0;
     const totalItems = cart.reduce((a, c) => a + c.qty, 0);
     const diskonPerUnit = totalItems > 0 ? Math.floor(diskonNilai / totalItems) : 0;
     const diskonSisa = totalItems > 0 ? diskonNilai - (diskonPerUnit * totalItems) : 0;
@@ -1504,6 +1504,8 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
   const getStokPct = (item) => item.stok === 0 ? 0 : Math.min(100, (item.stok / (item.minimum * 3)) * 100);
 
   const fmt = (n) => "Rp " + (n || 0).toLocaleString("id-ID");
+  // parseRp: handle Indonesian number format — 10.000 → 10000, 1.500.000 → 1500000
+  const parseRp = (v) => parseInt(String(v || "").replace(/\./g, "").replace(/,/g, "")) || 0;
 
   // ── Keuangan helpers ──
   const JURNAL_ACCOUNTS = [
@@ -1577,7 +1579,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       revenue_account_code: "4-40003",
       channel: mktSettlePlatform,
       description: `Settlement ${mktSettlePlatform}${mktSettleRef ? " · " + mktSettleRef : ""}${mktSettleNotes ? " · " + mktSettleNotes : ""}`,
-      amount: parseInt(mktSettleAmount) || 0,
+      amount: parseRp(mktSettleAmount) || 0,
       payment_method: "transfer",
       customer: mktSettlePlatform,
       pay_to_account_code: "1-10002-2",
@@ -1595,9 +1597,9 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const ts = Date.now();
     const dateStr = consDate.replace(/-/g, "");
     const qty = parseInt(consQty) || 1;
-    const harga = parseInt(consHarga) || 0;
-    const diskon = parseInt(consDiskon) || 0;
-    const shipping = parseInt(consShipping) || 0;
+    const harga = parseRp(consHarga) || 0;
+    const diskon = parseRp(consDiskon) || 0;
+    const shipping = parseRp(consShipping) || 0;
     const fee = parseFloat(consFee) || 22.5;
     const grossRevenue = harga * qty - diskon + shipping;
     const feeAmount = Math.round((harga * qty) * fee / 100);
@@ -1616,7 +1618,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       pay_to_account_code: "1-10002-2",
       invoice_number: null,
       source_type: "consignment",
-      cogs: parseInt(consCogs) || 0,
+      cogs: parseRp(consCogs) || 0,
       gross_revenue: grossRevenue,
       fee_amount: feeAmount
     };
@@ -1635,7 +1637,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       account_code: expAccount,
       account_name: acc ? acc.name : expAccount,
       description: expDesc,
-      amount: parseInt(expAmount) || 0,
+      amount: parseRp(expAmount) || 0,
       payment_method: expPayMethod,
       recipient: expRecipient,
       created_at: new Date().toISOString(),
@@ -1654,7 +1656,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       source: incSource,
       channel: incChannel,
       description: incDesc,
-      amount: parseInt(incAmount) || 0,
+      amount: parseRp(incAmount) || 0,
       payment_method: incPayMethod,
       customer: incCustomer,
       created_at: new Date().toISOString(),
@@ -2580,13 +2582,13 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
               <button
                 onClick={() => {
                   if (invoiceItems.length === 0) return showToast("Tambah minimal 1 item!", "danger");
-                  if (invoiceShipping === "plai" && (!invoiceShipCost || parseInt(invoiceShipCost) <= 0)) return showToast("Isi biaya shipping!", "danger");
-                  const invPelangganCost = invoiceShipping === "pelanggan" && !invoiceMarketplace ? parseInt(invoicePelangganShipCost) || 0 : 0;
+                  if (invoiceShipping === "plai" && (!invoiceShipCost || parseRp(invoiceShipCost) <= 0)) return showToast("Isi biaya shipping!", "danger");
+                  const invPelangganCost = invoiceShipping === "pelanggan" && !invoiceMarketplace ? parseRp(invoicePelangganShipCost) || 0 : 0;
                   const invCatatan = invoiceMarketplace ? (invoiceCatatan ? invoiceCatatan + " — Marketplace" : "Marketplace") : invoiceCatatan;
                   invoiceItems.forEach(item => {
                     const itemData = inventory.find(i => i.sku === item.sku);
                     if (itemData && item.jumlah > itemData.stok) return showToast(`Stok ${item.nama} tidak cukup!`, "danger");
-                    handleKeluar({ sku: item.sku, nama: item.nama, jumlah: item.jumlah, channel: invoiceChannel, shipping: invoiceShipping, shippingCost: invoiceShipping === "plai" ? parseInt(invoiceShipCost) : 0, pelangganShipCost: invPelangganCost, marketplace: invoiceMarketplace, catatan: invCatatan, staff: invoiceStaff });
+                    handleKeluar({ sku: item.sku, nama: item.nama, jumlah: item.jumlah, channel: invoiceChannel, shipping: invoiceShipping, shippingCost: invoiceShipping === "plai" ? parseRp(invoiceShipCost) : 0, pelangganShipCost: invPelangganCost, marketplace: invoiceMarketplace, catatan: invCatatan, staff: invoiceStaff });
                   });
                   showToast(`✓ Invoice ${invoiceItems.length} item berhasil disimpan`);
                   setInvoiceItems([]);
@@ -3486,9 +3488,9 @@ END $$;`;
       const subtotal = cart.reduce((a, c) => a + c.harga * c.qty, 0);
       const diskonNilai = kasirDiskonTipe === "persen"
         ? Math.round(subtotal * (parseFloat(kasirDiskonNilai) || 0) / 100)
-        : (parseInt(kasirDiskonNilai) || 0);
+        : (parseRp(kasirDiskonNilai) || 0);
       const total = Math.max(0, subtotal - diskonNilai);
-      const kembalian = kasirPayMethod === "cash" ? (parseInt(kasirBayar) || 0) - total : 0;
+      const kembalian = kasirPayMethod === "cash" ? (parseRp(kasirBayar) || 0) - total : 0;
 
       if (kasirReceipt) {
         const r = kasirReceipt;
@@ -4040,8 +4042,8 @@ END $$;`;
                   {consHarga && consQty && (
                     <div style={{ background: COLORS.brown, borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 11 }}>
                       {(() => {
-                        const gross = (parseInt(consHarga)||0) * (parseInt(consQty)||1) - (parseInt(consDiskon)||0) + (parseInt(consShipping)||0);
-                        const fee = Math.round((parseInt(consHarga)||0) * (parseInt(consQty)||1) * (parseFloat(consFee)||22.5) / 100);
+                        const gross = (parseRp(consHarga)||0) * (parseInt(consQty)||1) - (parseRp(consDiskon)||0) + (parseRp(consShipping)||0);
+                        const fee = Math.round((parseRp(consHarga)||0) * (parseInt(consQty)||1) * (parseFloat(consFee)||22.5) / 100);
                         const net = gross - fee;
                         return <>
                           Gross: <span style={{ color: COLORS.cream }}>Rp {gross.toLocaleString("id-ID")}</span>
