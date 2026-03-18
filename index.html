@@ -151,7 +151,8 @@ const save = (key, val) => {
 // This prevents state (selected SKU, form fields) from resetting on parent re-render
 const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, onOpenCamera, barcodeMap, onBarcodeNotFound }) => {
   const todayStr = new Date().toISOString().split("T")[0];
-  const [form, setForm] = useState({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: todayStr });
+  const [form, setForm] = useState({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: todayStr, mktHarga: "", mktOrderNo: "", mktOngkir: "" });
+  const isMkt = (ch) => ["shopee","tokopedia","tiktok"].includes(ch);
   const [scanInput, setScanInput] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
   const selected = inventory.find(i => i.sku === form.sku);
@@ -206,9 +207,10 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
     if (!form.sku || form.jumlah < 1) return showToast("Pilih barang dan jumlah dulu!", "danger");
     if (tipe !== "masuk" && selected && form.jumlah > selected.stok) return showToast("Stok tidak cukup!", "danger");
     if (tipe === "keluar" && form.shipping === "plai" && (!form.shippingCost || form.shippingCost <= 0)) return showToast("Isi biaya shipping Plai dulu!", "danger");
+    if (tipe === "keluar" && isMkt(form.channel) && (!form.mktHarga || parseInt(form.mktHarga) <= 0)) return showToast("Isi harga jual marketplace dulu!", "danger");
     const pelangganShipCostVal = form.shipping === "pelanggan" && !form.marketplace ? parseInt(form.pelangganShipCost) || 0 : 0;
-    onSubmit({ sku: form.sku, jumlah: parseInt(form.jumlah), channel: form.channel, shipping: form.shipping, shippingCost: form.shipping === "plai" ? parseInt(form.shippingCost) : 0, pelangganShipCost: pelangganShipCostVal, marketplace: form.marketplace || false, catatan: (form.marketplace ? (form.catatan ? form.catatan + " — Marketplace" : "Marketplace") : form.catatan), staff: form.staff, peminjam: form.peminjam || "", nama: selected?.nama || "", tanggal: form.tanggal || todayStr });
-    setForm({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: new Date().toISOString().split("T")[0] });
+    onSubmit({ sku: form.sku, jumlah: parseInt(form.jumlah), channel: form.channel, shipping: form.shipping, shippingCost: form.shipping === "plai" ? parseInt(form.shippingCost) : 0, pelangganShipCost: pelangganShipCostVal, marketplace: form.marketplace || false, catatan: (form.marketplace ? (form.catatan ? form.catatan + " — Marketplace" : "Marketplace") : form.catatan), staff: form.staff, peminjam: form.peminjam || "", nama: selected?.nama || "", tanggal: form.tanggal || todayStr, mktHarga: isMkt(form.channel) ? parseInt(form.mktHarga) || 0 : 0, mktOrderNo: form.mktOrderNo || "", mktOngkir: isMkt(form.channel) ? parseInt(form.mktOngkir) || 0 : 0 });
+    setForm({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: new Date().toISOString().split("T")[0], mktHarga: "", mktOrderNo: "", mktOngkir: "" });
     setScanInput("");
   };
 
@@ -309,9 +311,38 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
                 <button key={val} onClick={() => set("channel", val)} style={{ ...s.btn(form.channel === val ? "primary" : "secondary"), fontSize: 11, padding: "6px 10px", whiteSpace: "nowrap" }}>{icon} {lbl}</button>
               ))}
             </div>
-            {form.channel === "kol" && <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 6 }}>📱 KOL: stok keluar dicatat, tidak generate income (marketing expense)</div>}
-            {(form.channel === "consignment" || form.channel === "b2b") && <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6 }}>💡 {form.channel === "consignment" ? "Consignment" : "B2B"}: income akan tercatat otomatis, payment via invoice terpisah</div>}
+            {form.channel === "kol" && <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 6 }}>📱 KOL: stok keluar dicatat sebagai marketing expense, tidak ada income.</div>}
+            {(form.channel === "consignment" || form.channel === "b2b") && <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6 }}>💡 Stok keluar dicatat. Catat income-nya di tab Keuangan → Pemasukan saat uang masuk.</div>}
+            {isMkt(form.channel) && <div style={{ fontSize: 11, color: COLORS.aqua, marginTop: 6 }}>🛒 Isi harga jual & no. order marketplace di bawah. Income dicatat di Pemasukan saat settlement cair.</div>}
           </div>
+
+          {/* Marketplace extra fields */}
+          {isMkt(form.channel) && (
+            <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, border: `1px solid ${COLORS.aquaDark}`, marginTop: -6 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.aqua, marginBottom: 10 }}>Detail Marketplace</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                <div>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Harga Jual di Platform (Rp) *</label>
+                  <input style={s.input} type="number" min="0" placeholder="cth: 165000" value={form.mktHarga} onChange={e => set("mktHarga", e.target.value)} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Ongkir dari Pelanggan (Rp)</label>
+                  <input style={s.input} type="number" min="0" placeholder="cth: 15000" value={form.mktOngkir} onChange={e => set("mktOngkir", e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>No. Order Platform</label>
+                <input style={s.input} type="text" placeholder="cth: SPX-123456789" value={form.mktOrderNo} onChange={e => set("mktOrderNo", e.target.value)} />
+              </div>
+              {form.mktHarga > 0 && (
+                <div style={{ marginTop: 8, fontSize: 11, color: COLORS.textMuted, background: COLORS.brown, borderRadius: 6, padding: "6px 10px" }}>
+                  Fee marketplace 10%: <span style={{ color: COLORS.danger }}>-Rp {(parseInt(form.mktHarga) * parseInt(form.jumlah) * 0.1).toLocaleString("id-ID")}</span>
+                  {" · "}Estimasi net: <span style={{ color: COLORS.success }}>Rp {(parseInt(form.mktHarga) * parseInt(form.jumlah) * 0.9 + (parseInt(form.mktOngkir)||0)).toLocaleString("id-ID")}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={s.formGroup}>
             <label style={s.label}>Shipping</label>
             <div style={{ display: "flex", gap: 8, marginBottom: form.shipping === "plai" ? 10 : 0 }}>
@@ -443,6 +474,7 @@ function PlaiInventory() {
   const [kasirShipCost, setKasirShipCost] = useState("");
   const [kasirMarketplace, setKasirMarketplace] = useState(false);
   const [kasirPelangganShipCost, setKasirPelangganShipCost] = useState("");
+  const [kasirChannel, setKasirChannel] = useState("terjual");
 
   // Multi-SKU invoice mode for Barang Keluar
   const [invoiceMode, setInvoiceMode] = useState(false);
@@ -484,6 +516,26 @@ function PlaiInventory() {
 
   // Laporan date filter
   const [laporanPeriod, setLaporanPeriod] = useState("semua"); // "hari", "minggu", "bulan", "semua"
+
+  // ── Pemasukan sub-type state ──────────────────────────────────────────────
+  const [incSubType, setIncSubType] = useState("marketplace"); // "marketplace" | "consignment" | "other"
+  // Marketplace settlement form
+  const todayForInc = new Date().toISOString().split("T")[0];
+  const [mktSettlePlatform, setMktSettlePlatform] = useState("Shopee");
+  const [mktSettleDate, setMktSettleDate] = useState(todayForInc);
+  const [mktSettleAmount, setMktSettleAmount] = useState("");
+  const [mktSettleRef, setMktSettleRef] = useState("");
+  const [mktSettleNotes, setMktSettleNotes] = useState("");
+  // Consignment settlement form
+  const [consToko, setConsToko] = useState("");
+  const [consProduk, setConsProduk] = useState("");
+  const [consQty, setConsQty] = useState("1");
+  const [consHarga, setConsHarga] = useState("");
+  const [consCogs, setConsCogs] = useState("");
+  const [consDiskon, setConsDiskon] = useState("");
+  const [consShipping, setConsShipping] = useState("");
+  const [consFee, setConsFee] = useState("22.5");
+  const [consDate, setConsDate] = useState(todayForInc);
 
   // Camera barcode scanner state
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -935,13 +987,12 @@ function PlaiInventory() {
   };
 
   // Channel → Jurnal.id source & revenue account mapping
+  // Only direct + event get auto-income at Barang Keluar
+  // Marketplace/consignment/b2b income recorded separately in Tab Pemasukan
   const CHANNEL_SOURCE_MAP = {
     terjual: "b2c_direct", direct: "b2c_direct",
-    shopee: "marketplace", tokopedia: "marketplace", tiktok: "marketplace",
     event: "event",
-    consignment: "consignment",
-    b2b: "b2b"
-    // kol: intentionally omitted — no income, creates expense only
+    // shopee/tokopedia/tiktok/consignment/b2b/kol: income via Tab Pemasukan only
   };
   const CHANNEL_REVENUE_MAP = {
     terjual: "4-40000", direct: "4-40000",
@@ -1181,7 +1232,7 @@ function PlaiInventory() {
       if (kasirMarketplace) catatanParts.push("Marketplace");
       const itemDiskon = diskonPerUnit * c.qty + (ci === 0 ? diskonSisa : 0);
       // Shipping cost only on first item to avoid double-counting
-      const data = { sku: c.sku, nama: c.nama, jumlah: c.qty, channel: "terjual", shipping: kasirShipping, shippingCost: ci === 0 ? shipCostInt : 0, pelangganShipCost: ci === 0 ? pelangganShipCostInt : 0, marketplace: kasirMarketplace, catatan: catatanParts.join(" — "), staff: kasirStaff, tanggal: kasirTanggal, invoiceId, diskon: itemDiskon };
+      const data = { sku: c.sku, nama: c.nama, jumlah: c.qty, channel: kasirChannel, shipping: kasirShipping, shippingCost: ci === 0 ? shipCostInt : 0, pelangganShipCost: ci === 0 ? pelangganShipCostInt : 0, marketplace: kasirMarketplace, catatan: catatanParts.join(" — "), staff: kasirStaff, tanggal: kasirTanggal, invoiceId, diskon: itemDiskon };
       handleKeluar(data);
     });
 
@@ -1212,6 +1263,7 @@ function PlaiInventory() {
     setKasirShipCost("");
     setKasirMarketplace(false);
     setKasirPelangganShipCost("");
+    setKasirChannel("terjual");
   };
 
   const handleDeleteProduct = (sku) => {
@@ -1511,6 +1563,67 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     try {
       await sbClient.from('incomes').delete().eq('id', id);
     } catch (e) { console.error('Income delete error:', e); }
+  };
+
+  const addMarketplaceSettlement = () => {
+    if (!mktSettleAmount) { showToast("Isi jumlah settlement!", "danger"); return; }
+    const ts = Date.now();
+    const dateStr = mktSettleDate.replace(/-/g, "");
+    const inc = {
+      id: ts,
+      date: mktSettleDate,
+      income_number: `INC-${dateStr}-${String(ts).slice(-4)}`,
+      source: "marketplace",
+      revenue_account_code: "4-40003",
+      channel: mktSettlePlatform,
+      description: `Settlement ${mktSettlePlatform}${mktSettleRef ? " · " + mktSettleRef : ""}${mktSettleNotes ? " · " + mktSettleNotes : ""}`,
+      amount: parseInt(mktSettleAmount) || 0,
+      payment_method: "transfer",
+      customer: mktSettlePlatform,
+      pay_to_account_code: "1-10002-2",
+      invoice_number: mktSettleRef || null,
+      source_type: "marketplace"
+    };
+    setIncomes(prev => [inc, ...prev]);
+    sbInsertIncome(inc);
+    showToast("✓ Settlement marketplace tersimpan!");
+    setMktSettleAmount(""); setMktSettleRef(""); setMktSettleNotes("");
+  };
+
+  const addConsignmentSettlement = () => {
+    if (!consToko || !consProduk || !consHarga) { showToast("Isi toko, produk, dan harga jual!", "danger"); return; }
+    const ts = Date.now();
+    const dateStr = consDate.replace(/-/g, "");
+    const qty = parseInt(consQty) || 1;
+    const harga = parseInt(consHarga) || 0;
+    const diskon = parseInt(consDiskon) || 0;
+    const shipping = parseInt(consShipping) || 0;
+    const fee = parseFloat(consFee) || 22.5;
+    const grossRevenue = harga * qty - diskon + shipping;
+    const feeAmount = Math.round((harga * qty) * fee / 100);
+    const netRevenue = grossRevenue - feeAmount;
+    const inc = {
+      id: ts,
+      date: consDate,
+      income_number: `INC-${dateStr}-${String(ts).slice(-4)}`,
+      source: "consignment",
+      revenue_account_code: "4-40004",
+      channel: consToko,
+      description: `Consignment ${consProduk} x${qty} @ ${consToko} (fee ${fee}%)`,
+      amount: netRevenue,
+      payment_method: "transfer",
+      customer: consToko,
+      pay_to_account_code: "1-10002-2",
+      invoice_number: null,
+      source_type: "consignment",
+      cogs: parseInt(consCogs) || 0,
+      gross_revenue: grossRevenue,
+      fee_amount: feeAmount
+    };
+    setIncomes(prev => [inc, ...prev]);
+    sbInsertIncome(inc);
+    showToast("✓ Consignment settlement tersimpan!");
+    setConsToko(""); setConsProduk(""); setConsQty("1"); setConsHarga(""); setConsCogs(""); setConsDiskon(""); setConsShipping(""); setConsDate(new Date().toISOString().split("T")[0]);
   };
 
   const addExpense = () => {
@@ -3623,6 +3736,20 @@ END $$;`;
                 )}
               </div>
 
+              {/* Channel */}
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ ...s.label, marginBottom: 6 }}>📣 Channel</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {[["terjual","🛒","Direct"], ["event","🎪","Event"]].map(([val, icon, lbl]) => (
+                    <button key={val} onClick={() => setKasirChannel(val)}
+                      style={{ ...s.btn(kasirChannel === val ? "primary" : "secondary"), flex: 1, fontSize: 12, padding: "7px 4px" }}>{icon} {lbl}</button>
+                  ))}
+                </div>
+                {kasirChannel === "event" && (
+                  <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 4 }}>🎪 Income tercatat sebagai Event/Bazaar</div>
+                )}
+              </div>
+
               {/* Staff */}
               <div style={{ marginBottom: 12 }}>
                 <label style={{ ...s.label, marginBottom: 6 }}>Staff</label>
@@ -3818,74 +3945,140 @@ END $$;`;
           {/* ── INCOME TAB ── */}
           {keuanganTab === "income" && (
             <div>
-              <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.brownLight}` }}>
-                <h3 style={{ color: COLORS.aqua, marginBottom: 12, fontSize: 15 }}>📥 Catat Pemasukan (Non-Kasir)</h3>
-                <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 12 }}>Untuk pemasukan dari Marketplace, Consignment, B2B, dll. Penjualan via Kasir sudah otomatis ter-track.</p>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Tanggal</label>
-                    <input type="date" value={incDate} onChange={e => setIncDate(e.target.value)}
-                      style={{ ...s.input, width: "100%" }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Jumlah (Rp)</label>
-                    <input type="number" value={incAmount} onChange={e => setIncAmount(e.target.value)} placeholder="0"
-                      style={{ ...s.input, width: "100%" }} />
-                  </div>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-                  <div>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Sumber</label>
-                    <select value={incSource} onChange={e => { setIncSource(e.target.value); setIncChannel(""); }}
-                      style={{ ...s.input, width: "100%" }}>
-                      {INCOME_SOURCES.map(src => (
-                        <option key={src.id} value={src.id}>{src.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Channel</label>
-                    {INCOME_SOURCES.find(src => src.id === incSource)?.channels?.length > 0 ? (
-                      <select value={incChannel} onChange={e => setIncChannel(e.target.value)}
-                        style={{ ...s.input, width: "100%" }}>
-                        <option value="">— Pilih —</option>
-                        {INCOME_SOURCES.find(src => src.id === incSource).channels.map(ch => (
-                          <option key={ch} value={ch}>{ch}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input type="text" value={incChannel} onChange={e => setIncChannel(e.target.value)} placeholder="Nama toko / partner"
-                        style={{ ...s.input, width: "100%" }} />
-                    )}
-                  </div>
-                </div>
-                <div style={{ marginTop: 10 }}>
-                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Deskripsi</label>
-                  <input type="text" value={incDesc} onChange={e => setIncDesc(e.target.value)} placeholder="e.g. Penjualan 10pcs via Shopee..."
-                    style={{ ...s.input, width: "100%" }} />
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-                  <div>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Metode Bayar</label>
-                    <select value={incPayMethod} onChange={e => setIncPayMethod(e.target.value)}
-                      style={{ ...s.input, width: "100%" }}>
-                      <option value="transfer">Transfer Bank</option>
-                      <option value="cash">Cash</option>
-                      <option value="ewallet">E-Wallet</option>
-                      <option value="marketplace_balance">Saldo Marketplace</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Customer</label>
-                    <input type="text" value={incCustomer} onChange={e => setIncCustomer(e.target.value)} placeholder="Nama customer"
-                      style={{ ...s.input, width: "100%" }} />
-                  </div>
-                </div>
-                <button onClick={addIncome}
-                  style={{ ...s.btn("primary"), width: "100%", marginTop: 12, padding: "11px 0", fontWeight: 700 }}>
-                  + Simpan Pemasukan
-                </button>
+              {/* Sub-type selector */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                {[["marketplace","🛒 Marketplace Settlement"],["consignment","🏪 Consignment"],["other","💵 Lainnya"]].map(([id, lbl]) => (
+                  <button key={id} onClick={() => setIncSubType(id)}
+                    style={{ ...s.btn(incSubType === id ? "primary" : "secondary"), flex: 1, fontSize: 11, padding: "8px 4px" }}>{lbl}</button>
+                ))}
               </div>
+
+              {/* MARKETPLACE SETTLEMENT FORM */}
+              {incSubType === "marketplace" && (
+                <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.aquaDark}` }}>
+                  <h3 style={{ color: COLORS.aqua, marginBottom: 4, fontSize: 14 }}>🛒 Marketplace Settlement</h3>
+                  <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 12 }}>Catat saat uang settlement dari platform cair ke rekening. Stok sudah tercatat di Barang Keluar.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Platform</label>
+                      <select value={mktSettlePlatform} onChange={e => setMktSettlePlatform(e.target.value)} style={{ ...s.input, width: "100%" }}>
+                        <option>Shopee</option><option>Tokopedia</option><option>TikTok Shop</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Tanggal Cair</label>
+                      <input type="date" value={mktSettleDate} onChange={e => setMktSettleDate(e.target.value)} style={{ ...s.input, width: "100%" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Jumlah Settlement (Rp) *</label>
+                      <input type="number" value={mktSettleAmount} onChange={e => setMktSettleAmount(e.target.value)} placeholder="Nominal yang masuk ke rekening" style={{ ...s.input, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>No. Disbursement / Referensi</label>
+                      <input type="text" value={mktSettleRef} onChange={e => setMktSettleRef(e.target.value)} placeholder="cth: DISB-20260318-xxx" style={{ ...s.input, width: "100%" }} />
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: 10 }}>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Catatan (opsional)</label>
+                    <input type="text" value={mktSettleNotes} onChange={e => setMktSettleNotes(e.target.value)} placeholder="cth: Settlement minggu 10-16 Maret" style={{ ...s.input, width: "100%" }} />
+                  </div>
+                  <button onClick={addMarketplaceSettlement} style={{ ...s.btn("primary"), width: "100%", padding: "11px 0", fontWeight: 700 }}>+ Simpan Settlement</button>
+                </div>
+              )}
+
+              {/* CONSIGNMENT SETTLEMENT FORM */}
+              {incSubType === "consignment" && (
+                <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.brownLight}` }}>
+                  <h3 style={{ color: COLORS.aqua, marginBottom: 4, fontSize: 14 }}>🏪 Consignment Settlement</h3>
+                  <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 12 }}>Catat laporan penjualan dari toko consignment.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Nama Toko *</label>
+                      <input type="text" value={consToko} onChange={e => setConsToko(e.target.value)} placeholder="cth: Sports Station" style={{ ...s.input, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Tanggal Laporan</label>
+                      <input type="date" value={consDate} onChange={e => setConsDate(e.target.value)} style={{ ...s.input, width: "100%" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Nama Produk *</label>
+                      <input type="text" value={consProduk} onChange={e => setConsProduk(e.target.value)} placeholder="cth: Jersey Home XL" style={{ ...s.input, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Qty</label>
+                      <input type="number" min="1" value={consQty} onChange={e => setConsQty(e.target.value)} style={{ ...s.input, width: "100%" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Harga Jual / pcs (Rp) *</label>
+                      <input type="number" value={consHarga} onChange={e => setConsHarga(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>COGS / pcs (Rp)</label>
+                      <input type="number" value={consCogs} onChange={e => setConsCogs(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Diskon (Rp)</label>
+                      <input type="number" value={consDiskon} onChange={e => setConsDiskon(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Shipping (Rp)</label>
+                      <input type="number" value={consShipping} onChange={e => setConsShipping(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Fee Consignment (%)</label>
+                      <input type="number" value={consFee} onChange={e => setConsFee(e.target.value)} placeholder="22.5" style={{ ...s.input, width: "100%" }} />
+                    </div>
+                  </div>
+                  {consHarga && consQty && (
+                    <div style={{ background: COLORS.brown, borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 11 }}>
+                      {(() => {
+                        const gross = (parseInt(consHarga)||0) * (parseInt(consQty)||1) - (parseInt(consDiskon)||0) + (parseInt(consShipping)||0);
+                        const fee = Math.round((parseInt(consHarga)||0) * (parseInt(consQty)||1) * (parseFloat(consFee)||22.5) / 100);
+                        const net = gross - fee;
+                        return <>
+                          Gross: <span style={{ color: COLORS.cream }}>Rp {gross.toLocaleString("id-ID")}</span>
+                          {" · "}Fee {consFee}%: <span style={{ color: COLORS.danger }}>-Rp {fee.toLocaleString("id-ID")}</span>
+                          {" · "}Net: <span style={{ color: COLORS.success, fontWeight: 700 }}>Rp {net.toLocaleString("id-ID")}</span>
+                        </>;
+                      })()}
+                    </div>
+                  )}
+                  <button onClick={addConsignmentSettlement} style={{ ...s.btn("primary"), width: "100%", padding: "11px 0", fontWeight: 700 }}>+ Simpan Consignment</button>
+                </div>
+              )}
+
+              {/* LAINNYA FORM (B2B manual / other) */}
+              {incSubType === "other" && (
+                <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.brownLight}` }}>
+                  <h3 style={{ color: COLORS.aqua, marginBottom: 4, fontSize: 14 }}>💵 Pemasukan Lainnya</h3>
+                  <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 12 }}>Untuk B2B payment, refund masuk, atau pemasukan lain yang tidak ada di kategori lain.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div><label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Tanggal</label>
+                      <input type="date" value={incDate} onChange={e => setIncDate(e.target.value)} style={{ ...s.input, width: "100%" }} /></div>
+                    <div><label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Jumlah (Rp)</label>
+                      <input type="number" value={incAmount} onChange={e => setIncAmount(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} /></div>
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Sumber</label>
+                    <select value={incSource} onChange={e => setIncSource(e.target.value)} style={{ ...s.input, width: "100%" }}>
+                      <option value="b2b">B2B</option><option value="other">Lainnya / Refund</option>
+                    </select>
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Deskripsi / Nama Customer</label>
+                    <input type="text" value={incDesc} onChange={e => setIncDesc(e.target.value)} placeholder="cth: B2B PT Maju Jaya — Invoice INV-001" style={{ ...s.input, width: "100%" }} />
+                  </div>
+                  <button onClick={addIncome} style={{ ...s.btn("primary"), width: "100%", marginTop: 12, padding: "11px 0", fontWeight: 700 }}>+ Simpan Pemasukan</button>
+                </div>
+              )}
 
               {/* Income list */}
               <h3 style={{ color: COLORS.cream, marginBottom: 8, fontSize: 14 }}>Riwayat Pemasukan Non-Kasir ({filteredIncomes.length})</h3>
