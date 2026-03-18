@@ -465,7 +465,7 @@ function PlaiInventory() {
   // Multi-SKU invoice mode for Barang Keluar
   const [invoiceMode, setInvoiceMode] = useState(false);
   const [invoiceItems, setInvoiceItems] = useState([]); // [{sku, nama, jumlah, harga}]
-  const [invoiceChannel, setInvoiceChannel] = useState("terjual");
+  const [invoiceChannel, setInvoiceChannel] = useState("shopee");
   const [invoiceShipping, setInvoiceShipping] = useState("none");
   const [invoiceShipCost, setInvoiceShipCost] = useState("");
   const [invoiceMarketplace, setInvoiceMarketplace] = useState(false);
@@ -1512,6 +1512,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     { code: "6-60009", name: "Research and Development", group: "Selling" },
     { code: "6-60102", name: "Wages", group: "G&A" },
     { code: "6-60103", name: "Meals and Transport", group: "G&A" },
+    { code: "6-60005", name: "Communication Sales", group: "G&A" },
     { code: "6-60207", name: "Dues & Subscription", group: "G&A" },
     { code: "6-60209", name: "Legal & Professional Fees", group: "G&A" },
     { code: "6-60214", name: "Taxes and Licenses", group: "G&A" },
@@ -1690,7 +1691,11 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
   const exportKeuanganExcel = () => {
     const wb = XLSX.utils.book_new();
     const filteredExp = filterByPeriod(expenses, keuanganPeriod);
-    const filteredInc = filterByPeriod(incomes, keuanganPeriod);
+    // Exclude auto-income kasir (b2c_direct/event) dari filteredInc — kasirRevenue sudah cover dari transactions
+    const filteredInc = filterByPeriod(
+      incomes.filter(i => !["b2c_direct", "event"].includes(i.source_type)),
+      keuanganPeriod
+    );
 
     // Helper: format payment method for Jurnal.id
     const fmtPayMethod = (m) => {
@@ -1797,8 +1802,10 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       if (!totalIncBySrc[key]) totalIncBySrc[key] = 0;
       totalIncBySrc[key] += i.amount;
     });
+    // kasirRevenue: semua channel kasir langsung dari transactions (terjual/wa/dm/web/event)
+    // filteredInc sudah exclude auto-income kasir (b2c_direct/event) — hindari double-count
     const kasirRevenue = filterByPeriod(
-      transactions.filter(t => t.tipe === "keluar" && (t.channel === "terjual" || t.channel === "event" || t.channel === "kol")),
+      transactions.filter(t => t.tipe === "keluar" && Object.keys(CHANNEL_SOURCE_MAP).includes(t.channel)),
       keuanganPeriod
     ).reduce((sum, t) => sum + (t.jumlah * t.harga), 0);
 
@@ -2405,7 +2412,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
             onClick={() => {
               setInvoiceMode(!invoiceMode);
               setInvoiceItems([]);
-              setInvoiceChannel("terjual");
+              setInvoiceChannel("shopee");
               setInvoiceShipping("none");
               setInvoiceShipCost("");
               setInvoiceStaff(STAFF_LIST[0]);
@@ -3382,7 +3389,7 @@ END $$;`;
       const handleDisconnect = () => {
         try { localStorage.removeItem('plai_sburl'); localStorage.removeItem('plai_sbkey'); } catch {}
         setSbClient(null); setSbConnected(false); setSbUrl(''); setSbKey('');
-        setInputUrl(''); setInputKey('');
+        setSbInputUrl(''); setSbInputKey('');
         showToast("Database diputus", "warning");
       };
 
@@ -3774,11 +3781,18 @@ END $$;`;
     },
     keuangan: () => {
       const filteredExpenses = filterByPeriod(expenses, keuanganPeriod);
-      const filteredIncomes = filterByPeriod(incomes, keuanganPeriod);
+      // Exclude auto-income records yang dibuat oleh kasir (source_type: b2c_direct / event)
+      // karena revenue kasir sudah dihitung lewat kasirRev dari transactions — hindari double-count
+      const filteredIncomes = filterByPeriod(
+        incomes.filter(i => !["b2c_direct", "event"].includes(i.source_type)),
+        keuanganPeriod
+      );
       const totalExp = filteredExpenses.reduce((s, e) => s + e.amount, 0);
       const totalInc = filteredIncomes.reduce((s, i) => s + i.amount, 0);
+      // kasirRev: semua channel kasir langsung (terjual/wa/dm/web/event) dari transactions
+      // filteredIncomes sudah exclude auto-income b2c_direct/event untuk hindari double-count
       const kasirRev = filterByPeriod(
-        transactions.filter(t => t.tipe === "keluar" && (t.channel === "terjual" || t.channel === "event" || t.channel === "kol")),
+        transactions.filter(t => t.tipe === "keluar" && Object.keys(CHANNEL_SOURCE_MAP).includes(t.channel)),
         keuanganPeriod
       ).reduce((sum, t) => sum + (t.jumlah * t.harga), 0);
       const totalRevenue = kasirRev + totalInc;
