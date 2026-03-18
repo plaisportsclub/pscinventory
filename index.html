@@ -151,7 +151,7 @@ const save = (key, val) => {
 // This prevents state (selected SKU, form fields) from resetting on parent re-render
 const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, onOpenCamera, barcodeMap, onBarcodeNotFound }) => {
   const todayStr = new Date().toISOString().split("T")[0];
-  const [form, setForm] = useState({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: todayStr, mktHarga: "", mktOrderNo: "", mktOngkir: "" });
+  const [form, setForm] = useState({ sku: "", jumlah: 1, channel: "shopee", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: todayStr, mktHarga: "", mktOrderNo: "", mktOngkir: "" });
   const isMkt = (ch) => ["shopee","tokopedia","tiktok"].includes(ch);
   const [scanInput, setScanInput] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
@@ -210,7 +210,7 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
     if (tipe === "keluar" && isMkt(form.channel) && (!form.mktHarga || parseRp(form.mktHarga) <= 0)) return showToast("Isi harga jual marketplace dulu!", "danger");
     const pelangganShipCostVal = form.shipping === "pelanggan" && !form.marketplace ? parseRp(form.pelangganShipCost) || 0 : 0;
     onSubmit({ sku: form.sku, jumlah: parseInt(form.jumlah), channel: form.channel, shipping: form.shipping, shippingCost: form.shipping === "plai" ? parseRp(form.shippingCost) : 0, pelangganShipCost: pelangganShipCostVal, marketplace: form.marketplace || false, catatan: (form.marketplace ? (form.catatan ? form.catatan + " — Marketplace" : "Marketplace") : form.catatan), staff: form.staff, peminjam: form.peminjam || "", nama: selected?.nama || "", tanggal: form.tanggal || todayStr, mktHarga: isMkt(form.channel) ? parseRp(form.mktHarga) || 0 : 0, mktOrderNo: form.mktOrderNo || "", mktOngkir: isMkt(form.channel) ? parseRp(form.mktOngkir) || 0 : 0 });
-    setForm({ sku: "", jumlah: 1, channel: "terjual", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: new Date().toISOString().split("T")[0], mktHarga: "", mktOrderNo: "", mktOngkir: "" });
+    setForm({ sku: "", jumlah: 1, channel: "shopee", shipping: "none", shippingCost: "", pelangganShipCost: "", marketplace: false, catatan: "", staff: STAFF_LIST[0], peminjam: "", tanggal: new Date().toISOString().split("T")[0], mktHarga: "", mktOrderNo: "", mktOngkir: "" });
     setScanInput("");
   };
 
@@ -307,7 +307,7 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
           <div style={s.formGroup}>
             <label style={s.label}>Channel Keluar</label>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {[["terjual","🛒","Direct Online"],["shopee","🟠","Shopee"],["tokopedia","🟢","Tokopedia"],["tiktok","⬛","TikTok"],["event","🎪","Event/Bazaar"],["consignment","🏪","Consignment"],["b2b","🏢","B2B"],["kol","📱","KOL"]].map(([val, icon, lbl]) => (
+              {[["shopee","🟠","Shopee"],["tokopedia","🟢","Tokopedia"],["tiktok","⬛","TikTok"],["consignment","🏪","Consignment"],["kol","📱","KOL"]].map(([val, icon, lbl]) => (
                 <button key={val} onClick={() => set("channel", val)} style={{ ...s.btn(form.channel === val ? "primary" : "secondary"), fontSize: 11, padding: "6px 10px", whiteSpace: "nowrap" }}>{icon} {lbl}</button>
               ))}
             </div>
@@ -522,6 +522,7 @@ function PlaiInventory() {
   const [consShipping, setConsShipping] = useState("");
   const [consFee, setConsFee] = useState("22.5");
   const [consDate, setConsDate] = useState(todayForInc);
+  const [consRef, setConsRef] = useState("");
 
   // Camera barcode scanner state
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -976,12 +977,15 @@ function PlaiInventory() {
   // Only direct + event get auto-income at Barang Keluar
   // Marketplace/consignment/b2b income recorded separately in Tab Pemasukan
   const CHANNEL_SOURCE_MAP = {
+    // Kasir channels — income auto-created
     terjual: "b2c_direct", direct: "b2c_direct",
+    wa: "b2c_direct", dm: "b2c_direct", web: "b2c_direct",
     event: "event",
-    // shopee/tokopedia/tiktok/consignment/b2b/kol: income via Tab Pemasukan only
+    // shopee/tokopedia/tiktok/consignment/kol: income via Tab Pemasukan only
   };
   const CHANNEL_REVENUE_MAP = {
     terjual: "4-40000", direct: "4-40000",
+    wa: "4-40000", dm: "4-40000", web: "4-40000",
     shopee: "4-40003", tokopedia: "4-40003", tiktok: "4-40003",
     event: "4-40002",
     consignment: "4-40004",
@@ -989,12 +993,14 @@ function PlaiInventory() {
   };
   const CHANNEL_LABELS = {
     terjual: "Direct Online", direct: "Direct Online",
+    wa: "WA Order", dm: "DM Order", web: "Website",
     shopee: "Shopee", tokopedia: "Tokopedia", tiktok: "TikTok",
     event: "Event/Bazaar", kol: "KOL",
     consignment: "Consignment", b2b: "B2B"
   };
   const CHANNEL_COLORS = {
     terjual: "#4ECDC4", direct: "#4ECDC4",
+    wa: "#25D366", dm: "#C13584", web: "#4ECDC4",
     shopee: "#FF6B35", tokopedia: "#45B649",
     tiktok: "#FF0050", event: "#F7DC6F",
     kol: "#F0A500", consignment: "#9B59B6", b2b: "#3498DB"
@@ -1597,12 +1603,12 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       source: "consignment",
       revenue_account_code: "4-40004",
       channel: consToko,
-      description: `Consignment ${consProduk} x${qty} @ ${consToko} (fee ${fee}%)`,
+      description: `Consignment ${consProduk} x${qty} @ ${consToko} (fee ${fee}%)${consRef ? ` | Ref: ${consRef}` : ""}`,
       amount: netRevenue,
       payment_method: "transfer",
       customer: consToko,
       pay_to_account_code: "1-10002-2",
-      invoice_number: null,
+      invoice_number: consRef || null,
       source_type: "consignment",
       cogs: parseRp(consCogs) || 0,
       gross_revenue: grossRevenue,
@@ -1611,7 +1617,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     setIncomes(prev => [inc, ...prev]);
     sbInsertIncome(inc);
     showToast("✓ Consignment settlement tersimpan!");
-    setConsToko(""); setConsProduk(""); setConsQty("1"); setConsHarga(""); setConsCogs(""); setConsDiskon(""); setConsShipping(""); setConsDate(new Date().toISOString().split("T")[0]);
+    setConsToko(""); setConsProduk(""); setConsQty("1"); setConsHarga(""); setConsCogs(""); setConsDiskon(""); setConsShipping(""); setConsDate(new Date().toISOString().split("T")[0]); setConsRef("");
   };
 
   const addExpense = () => {
@@ -2393,7 +2399,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       <div style={{ maxWidth: 600 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <div>
-            <p style={{ color: COLORS.textMuted, marginBottom: 4, fontSize: 13 }}>Catat barang keluar: penjualan, KOL, atau event.</p>
+            <p style={{ color: COLORS.textMuted, marginBottom: 4, fontSize: 13 }}>Catat barang keluar: Marketplace, Consignment, KOL Influencer dan Pinjam Baju. Pencatatan Settlement uang masuk untuk Marketplace dan Consignment harap ke Pemasukan di Tab Keuangan</p>
           </div>
           <button
             onClick={() => {
@@ -2501,13 +2507,10 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                 <div style={s.formGroup}>
                   <label style={s.label}>Channel</label>
                   <select style={s.select} value={invoiceChannel} onChange={e => setInvoiceChannel(e.target.value)}>
-                    <option value="terjual">🛒 Direct Online</option>
                     <option value="shopee">🟠 Shopee</option>
                     <option value="tokopedia">🟢 Tokopedia</option>
                     <option value="tiktok">⬛ TikTok</option>
-                    <option value="event">🎪 Event/Bazaar</option>
                     <option value="consignment">🏪 Consignment</option>
-                    <option value="b2b">🏢 B2B</option>
                     <option value="kol">📱 KOL</option>
                   </select>
                 </div>
@@ -2531,23 +2534,9 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
               {invoiceShipping === "pelanggan" && (
                 <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, border: `1px solid ${COLORS.brownLight}`, marginBottom: 12 }}>
                   <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 8 }}>📦 Shipping ditanggung pelanggan</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: invoiceMarketplace ? 0 : 10 }}>
-                    <div onClick={() => { setInvoiceMarketplace(!invoiceMarketplace); if (!invoiceMarketplace) setInvoicePelangganShipCost(""); }}
-                      style={{ width: 40, height: 22, borderRadius: 11, background: invoiceMarketplace ? COLORS.aqua : COLORS.brownLight, cursor: "pointer", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
-                      <div style={{ width: 18, height: 18, borderRadius: 9, background: COLORS.white, position: "absolute", top: 2, left: invoiceMarketplace ? 20 : 2, transition: "left 0.2s" }} />
-                    </div>
-                    <span style={{ fontSize: 12, color: invoiceMarketplace ? COLORS.aqua : COLORS.textMuted, fontWeight: invoiceMarketplace ? 600 : 400 }}>Dari Marketplace</span>
-                  </div>
-                  {!invoiceMarketplace && (
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 4, display: "block" }}>Biaya Shipping dari Pelanggan (opsional)</label>
-                      <input style={s.input} type="number" min="0" placeholder="cth: 15000" value={invoicePelangganShipCost} onChange={e => setInvoicePelangganShipCost(e.target.value)} />
-                      <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Kosongkan jika tidak perlu di-track</div>
-                    </div>
-                  )}
-                  {invoiceMarketplace && (
-                    <div style={{ fontSize: 10, color: COLORS.aquaDark, marginTop: 4 }}>Shipping dihandle marketplace — tidak perlu track biaya</div>
-                  )}
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 4, display: "block" }}>Biaya Shipping dari Pelanggan (opsional)</label>
+                  <input style={s.input} type="number" min="0" placeholder="cth: 15000" value={invoicePelangganShipCost} onChange={e => setInvoicePelangganShipCost(e.target.value)} />
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Kosongkan jika tidak perlu di-track</div>
                 </div>
               )}
 
@@ -2560,25 +2549,27 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                 </div>
               </div>
 
-              <div style={s.formGroup}>
-                <label style={s.label}>Catatan (opsional)</label>
-                <input style={s.input} placeholder="Catatan invoice..." value={invoiceCatatan} onChange={e => setInvoiceCatatan(e.target.value)} />
+              <div style={s.grid2}>
+                <div style={s.formGroup}>
+                  <label style={s.label}>🧾 No. Invoice <span style={{ color: COLORS.textMuted, fontWeight: 400 }}>(opsional)</span></label>
+                  <input style={s.input} placeholder="cth: SO/2026/03/001" value={invoiceCatatan} onChange={e => setInvoiceCatatan(e.target.value)} />
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Untuk consignment: pakai nomor pengiriman ke toko</div>
+                </div>
               </div>
 
               <button
                 onClick={() => {
                   if (invoiceItems.length === 0) return showToast("Tambah minimal 1 item!", "danger");
                   if (invoiceShipping === "plai" && (!invoiceShipCost || parseRp(invoiceShipCost) <= 0)) return showToast("Isi biaya shipping!", "danger");
-                  const invPelangganCost = invoiceShipping === "pelanggan" && !invoiceMarketplace ? parseRp(invoicePelangganShipCost) || 0 : 0;
-                  const invCatatan = invoiceMarketplace ? (invoiceCatatan ? invoiceCatatan + " — Marketplace" : "Marketplace") : invoiceCatatan;
+                  const invPelangganCost = invoiceShipping === "pelanggan" ? parseRp(invoicePelangganShipCost) || 0 : 0;
                   invoiceItems.forEach(item => {
                     const itemData = inventory.find(i => i.sku === item.sku);
                     if (itemData && item.jumlah > itemData.stok) return showToast(`Stok ${item.nama} tidak cukup!`, "danger");
-                    handleKeluar({ sku: item.sku, nama: item.nama, jumlah: item.jumlah, channel: invoiceChannel, shipping: invoiceShipping, shippingCost: invoiceShipping === "plai" ? parseRp(invoiceShipCost) : 0, pelangganShipCost: invPelangganCost, marketplace: invoiceMarketplace, catatan: invCatatan, staff: invoiceStaff });
+                    handleKeluar({ sku: item.sku, nama: item.nama, jumlah: item.jumlah, channel: invoiceChannel, shipping: invoiceShipping, shippingCost: invoiceShipping === "plai" ? parseRp(invoiceShipCost) : 0, pelangganShipCost: invPelangganCost, marketplace: false, catatan: invoiceCatatan, staff: invoiceStaff });
                   });
                   showToast(`✓ Invoice ${invoiceItems.length} item berhasil disimpan`);
                   setInvoiceItems([]);
-                  setInvoiceChannel("terjual");
+                  setInvoiceChannel("shopee");
                   setInvoiceShipping("none");
                   setInvoiceShipCost("");
                   setInvoiceMarketplace(false);
@@ -3728,13 +3719,16 @@ END $$;`;
               <div style={{ marginBottom: 12 }}>
                 <label style={{ ...s.label, marginBottom: 6 }}>📣 Channel</label>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {[["terjual","🛒","Direct"], ["event","🎪","Event"]].map(([val, icon, lbl]) => (
+                  {[["terjual","🛒","Walk-in"], ["wa","💬","WA"], ["dm","📸","DM"], ["web","🌐","Web"], ["event","🎪","Bazaar"]].map(([val, icon, lbl]) => (
                     <button key={val} onClick={() => setKasirChannel(val)}
-                      style={{ ...s.btn(kasirChannel === val ? "primary" : "secondary"), flex: 1, fontSize: 12, padding: "7px 4px" }}>{icon} {lbl}</button>
+                      style={{ ...s.btn(kasirChannel === val ? "primary" : "secondary"), flex: 1, fontSize: 11, padding: "7px 3px" }}>{icon} {lbl}</button>
                   ))}
                 </div>
                 {kasirChannel === "event" && (
-                  <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 4 }}>🎪 Income tercatat sebagai Event/Bazaar</div>
+                  <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 4 }}>🎪 Income tercatat sebagai Event/Bazaar (4-40002)</div>
+                )}
+                {["terjual","wa","dm","web"].includes(kasirChannel) && (
+                  <div style={{ fontSize: 11, color: COLORS.aqua, marginTop: 4 }}>Income tercatat sebagai Direct (4-40000)</div>
                 )}
               </div>
 
@@ -3984,12 +3978,17 @@ END $$;`;
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                     <div>
                       <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Nama Toko *</label>
-                      <input type="text" value={consToko} onChange={e => setConsToko(e.target.value)} placeholder="cth: Sports Station" style={{ ...s.input, width: "100%" }} />
+                      <input type="text" value={consToko} onChange={e => setConsToko(e.target.value)} placeholder="cth: Hotel Tentrem" style={{ ...s.input, width: "100%" }} />
                     </div>
                     <div>
                       <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Tanggal Laporan</label>
                       <input type="date" value={consDate} onChange={e => setConsDate(e.target.value)} style={{ ...s.input, width: "100%" }} />
                     </div>
+                  </div>
+                  <div style={{ marginBottom: 8 }}>
+                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>🔗 No. Referensi Konsinyasi <span style={{ color: COLORS.textMuted, fontStyle: "italic" }}>(opsional)</span></label>
+                    <input type="text" value={consRef} onChange={e => setConsRef(e.target.value)} placeholder="Isi no. invoice pengiriman barang ke toko (dari Tab Barang Keluar)" style={{ ...s.input, width: "100%" }} />
+                    <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Sebagai referensi untuk mencocokkan dengan catatan pengiriman</div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8, marginBottom: 8 }}>
                     <div>
