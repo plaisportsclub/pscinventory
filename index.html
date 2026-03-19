@@ -479,6 +479,7 @@ function PlaiInventory() {
   // delete confirmation state
   const [deleteConfirm, setDeleteConfirm] = useState(null); // sku yang sedang dikonfirmasi hapus
   const [editHarga, setEditHarga] = useState(null); // { sku, nama, hargaLama, hargaBaru }
+  const [editHpp, setEditHpp] = useState(null); // { sku, nama, hppLama, hppBaru }
   // discontinued / arsip
   const [showDiscontinued, setShowDiscontinued] = useState(false);
 
@@ -1085,7 +1086,7 @@ function PlaiInventory() {
         id: ts,
         date: data.tanggal || new Date().toISOString().split("T")[0],
         expense_number: `EXP-${dateStr}-${String(ts).slice(-4)}`,
-        from_account_code: "1-10200-2",
+        from_account_code: "1-10002-2",
         account_code: "6-60007",
         account_name: "KOL & PR Package",
         description: `KOL/PR: ${data.nama} x${data.jumlah}${data.catatan ? " — " + data.catatan : ""}`,
@@ -1118,7 +1119,7 @@ function PlaiInventory() {
         amount: incomeAmount,
         payment_method: "transfer",
         customer: data.customer || "",
-        pay_to_account_code: "1-10200-2",
+        pay_to_account_code: "1-10002-2",
         invoice_number: null,
         source_type: source
       };
@@ -1330,6 +1331,18 @@ function PlaiInventory() {
     }
     showToast(`✓ Harga ${sku} diupdate ke Rp ${hargaInt.toLocaleString("id-ID")} — ${affectedTx.length} transaksi direvisi`);
     setEditHarga(null);
+  };
+
+  const handleEditHpp = async (sku, hppBaru) => {
+    const hppInt = parseInt(hppBaru) || 0;
+    if (hppInt < 0) return showToast("HPP tidak valid", "danger");
+    setInventory(prev => prev.map(i => i.sku === sku ? { ...i, hpp: hppInt } : i));
+    if (sbClient) {
+      const { error } = await sbClient.from('inventory').update({ hpp: hppInt }).eq('sku', sku);
+      if (error) showToast('⚠ HPP gagal sync ke DB: ' + error.message, 'warning');
+    }
+    showToast(`✓ HPP ${sku} diupdate ke Rp ${hppInt.toLocaleString("id-ID")}`);
+    setEditHpp(null);
   };
 
   // ── import handlers ─────────────────────────────────────────────────────────
@@ -1617,7 +1630,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       amount: parseRp(mktSettleAmount) || 0,
       payment_method: "transfer",
       customer: mktSettlePlatform,
-      pay_to_account_code: "1-10200-2",
+      pay_to_account_code: "1-10002-2",
       invoice_number: mktSettleRef || null,
       source_type: "marketplace"
     };
@@ -1651,7 +1664,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       amount: netRevenue,
       payment_method: "transfer",
       customer: consToko,
-      pay_to_account_code: "1-10200-2",
+      pay_to_account_code: "1-10002-2",
       invoice_number: consRef || null,
       source_type: "consignment",
       cogs: parseRp(consCogs) || 0,
@@ -1669,7 +1682,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const acc = JURNAL_ACCOUNTS.find(a => a.code === expAccount);
     const ts = Date.now();
     const dateStr = expDate.replace(/-/g, "");
-    const payToAccCode = (expPayMethod === "cash" || expPayMethod === "tunai" || expPayMethod === "ewallet") ? "1-10100" : "1-10200-2";
+    const payToAccCode = (expPayMethod === "cash" || expPayMethod === "tunai" || expPayMethod === "ewallet") ? "1-10100" : "1-10002-2";
     const exp = {
       id: ts,
       date: expDate,
@@ -1706,7 +1719,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       amount: parseRp(incAmount) || 0,
       payment_method: incPayMethod,
       customer: incCustomer,
-      pay_to_account_code: (incPayMethod === "cash" || incPayMethod === "tunai") ? "1-10100" : "1-10200-2",
+      pay_to_account_code: (incPayMethod === "cash" || incPayMethod === "tunai") ? "1-10100" : "1-10002-2",
       created_at: new Date().toISOString(),
     };
     setIncomes(prev => [inc, ...prev]);
@@ -1754,7 +1767,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     );
     const isCash = (m) => ["cash","tunai","ewallet","gopay","ovo","dana","shopeepay"].includes((m||"").toLowerCase());
     const fmtPayMethod = (m) => isCash(m) ? "Cash" : "Transfer";
-    const fromAccCode = (m) => isCash(m) ? "1-10100" : "1-10200-2";
+    const fromAccCode = (m) => isCash(m) ? "1-10100" : "1-10002-2";
     const expNum = (e) => e.expense_number || `EXP-${(e.date||"").replace(/-/g,"").substring(0,8)}-${String(e.id||"").slice(-4)}`;
     const incNum = (i) => i.income_number || `INC-${(i.date||"").replace(/-/g,"").substring(0,8)}-${String(i.id||"").slice(-4)}`;
     const fmtDate = (d) => { if (!d) return ""; const p = d.split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : d; };
@@ -1857,6 +1870,78 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"P&L");
     XLSX.writeFile(wb,`Plai_PL_${getPeriodLabel()}_${getDateStr()}.xlsx`);
     showToast("✓ P&L Excel exported!");
+  };
+
+  // ── Export 6: COGS Journal Entry (Dr. 5-50000 / Cr. 1-10200) ──
+  const exportCOGSJournal = () => {
+    const kasirChs = [...Object.keys(CHANNEL_SOURCE_MAP), "terjual", "direct"];
+    const filteredTx = filterByPeriod(
+      transactions.filter(t => t.tipe === "keluar" && kasirChs.includes(t.channel)),
+      keuanganPeriod
+    );
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const parts = d.split("-");
+      return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : d;
+    };
+    // Build COGS rows — one debit + one credit per transaction with HPP
+    const journalRows = [];
+    let noHppSkus = new Set();
+    filteredTx.forEach((t, i) => {
+      const item = inventory.find(inv => inv.sku === t.sku);
+      const hpp = item?.hpp || 0;
+      if (!hpp) { noHppSkus.add(t.sku); return; }
+      const cogsAmt = hpp * t.jumlah;
+      const ref = `COGS-${(t.tanggal||"").replace(/-/g,"").slice(0,8)}-${String(t.id||i).slice(-4)}`;
+      const memo = `COGS: ${t.nama} x${t.jumlah} [${t.channel}]`;
+      // Debit row: 5-50000 Cost of Goods Sold
+      journalRows.push([fmtDate(t.tanggal), ref, memo, "5-50000", "Cost of Goods Sold", cogsAmt, "", t.tanggal]);
+      // Credit row: 1-10200 Inventory Finished Products
+      journalRows.push([fmtDate(t.tanggal), ref, memo, "1-10200", "Inventory Finished Products", "", cogsAmt, t.tanggal]);
+    });
+    if (journalRows.length === 0) {
+      const missing = noHppSkus.size;
+      showToast(`⚠ Tidak ada data COGS — ${missing} SKU belum punya HPP. Set HPP dulu di tab Cek Stok.`, "warning");
+      return;
+    }
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["*Date","*Reference","*Memo","*AccountCode","AccountName","*Debit","*Credit","DateISO"],
+      ...journalRows
+    ]);
+    ws["!cols"]=[{wch:12},{wch:24},{wch:40},{wch:14},{wch:28},{wch:14},{wch:14},{wch:12}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "COGS Journal");
+    // Summary sheet
+    const hppMap = {};
+    filteredTx.forEach(t => {
+      const item = inventory.find(inv => inv.sku === t.sku);
+      const hpp = item?.hpp || 0;
+      if (!hpp) return;
+      if (!hppMap[t.sku]) hppMap[t.sku] = { nama: t.nama, qty: 0, total: 0 };
+      hppMap[t.sku].qty += t.jumlah;
+      hppMap[t.sku].total += hpp * t.jumlah;
+    });
+    const summaryRows = [
+      ["COGS Summary — " + getPeriodLabel()],[],
+      ["SKU","Nama Produk","Qty Terjual","HPP/unit","Total COGS"],
+      ...Object.entries(hppMap).map(([sku, d]) => {
+        const item = inventory.find(inv => inv.sku === sku);
+        return [sku, d.nama, d.qty, item?.hpp||0, d.total];
+      }),
+      [],
+      ["TOTAL COGS", "", Object.values(hppMap).reduce((s,d)=>s+d.qty,0), "", Object.values(hppMap).reduce((s,d)=>s+d.total,0)]
+    ];
+    const ws2 = XLSX.utils.aoa_to_sheet(summaryRows);
+    ws2["!cols"]=[{wch:16},{wch:30},{wch:12},{wch:14},{wch:16}];
+    XLSX.utils.book_append_sheet(wb, ws2, "COGS Summary");
+    if (noHppSkus.size > 0) {
+      const missingRows = [["SKU belum ada HPP — perlu diset di tab Cek Stok"],[],["SKU"],
+        ...[...noHppSkus].map(sku => [sku])];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(missingRows), "Missing HPP");
+    }
+    XLSX.writeFile(wb, `Plai_COGS_Journal_${getPeriodLabel()}_${getDateStr()}.xlsx`);
+    const totalCOGS = Object.values(hppMap).reduce((s,d)=>s+d.total,0);
+    showToast(`✓ COGS Journal: ${journalRows.length/2} entries · Total Rp ${totalCOGS.toLocaleString("id-ID")}${noHppSkus.size>0?" · ⚠ "+noHppSkus.size+" SKU skip (no HPP)":""}`);
   };
 
   // ── Export Semua: all 5 sheets in one Excel ──
@@ -2309,7 +2394,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
           <div style={s.card}>
             <table style={s.table}>
               <thead>
-                <tr>{["SKU", "Nama", "Kategori", "Harga", "Stok", "Min", "Status", ""].map(h => <th key={h} style={s.th}>{h}</th>)}</tr>
+                <tr>{["SKU", "Nama", "Kategori", "Harga Jual", "HPP", "Nilai Stok", "Stok", "Min", "Status", ""].map(h => <th key={h} style={s.th}>{h}</th>)}</tr>
               </thead>
               <tbody>
                 {filtered.map(item => {
@@ -2334,7 +2419,22 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                       <span style={{ color: COLORS.aqua, fontSize: 12, fontWeight: 600 }}>{item.harga ? `Rp ${item.harga.toLocaleString("id-ID")}` : "-"}</span>
                       <button onClick={() => setEditHarga({ sku: item.sku, nama: item.nama, hargaLama: item.harga || 0, hargaBaru: String(item.harga || 0) })}
                         style={{ background: "transparent", border: "none", color: COLORS.textMuted, fontSize: 11, cursor: "pointer", padding: "2px 4px", marginLeft: 4, opacity: 0.6 }}
-                        title="Edit harga">✏️</button>
+                        title="Edit harga jual">✏️</button>
+                    </td>
+                    <td style={{ ...s.td, whiteSpace: "nowrap" }}>
+                      <span style={{ color: item.hpp ? COLORS.warning : COLORS.textMuted, fontSize: 12, fontWeight: item.hpp ? 600 : 400 }}>
+                        {item.hpp ? `Rp ${item.hpp.toLocaleString("id-ID")}` : <span style={{ opacity: 0.5 }}>— set HPP</span>}
+                      </span>
+                      <button onClick={() => setEditHpp({ sku: item.sku, nama: item.nama, hppLama: item.hpp || 0, hppBaru: String(item.hpp || 0) })}
+                        style={{ background: "transparent", border: "none", color: COLORS.textMuted, fontSize: 11, cursor: "pointer", padding: "2px 4px", marginLeft: 2, opacity: 0.6 }}
+                        title="Edit HPP (Harga Pokok Produksi)">✏️</button>
+                    </td>
+                    <td style={{ ...s.td, whiteSpace: "nowrap" }}>
+                      {item.hpp ? (
+                        <span style={{ color: COLORS.cream, fontSize: 12, fontWeight: 600 }}>
+                          Rp {((item.hpp || 0) * item.stok).toLocaleString("id-ID")}
+                        </span>
+                      ) : <span style={{ color: COLORS.textMuted, fontSize: 11, opacity: 0.5 }}>—</span>}
                     </td>
                     <td style={s.td}>
                       <div style={{ fontWeight: 700, color: getStokColor(item), fontSize: 15 }}>{item.stok}</div>
@@ -2389,6 +2489,57 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
           </div>
 
           {/* Edit Harga Modal */}
+          {editHpp && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setEditHpp(null)}>
+              <div style={{ background: COLORS.brown, borderRadius: 14, padding: 24, width: 400, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontWeight: 700, color: COLORS.warning, fontSize: 16, marginBottom: 6 }}>💰 Edit HPP (Harga Pokok Produksi)</div>
+                <div style={{ fontSize: 13, color: COLORS.cream, marginBottom: 4 }}>{editHpp.nama}</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>{editHpp.sku}</div>
+                <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 10, marginBottom: 14, fontSize: 12, color: COLORS.textMuted }}>
+                  HPP = biaya produksi per unit (bahan baku + jahit + sablon + packaging). Bukan harga jual.<br/>
+                  <span style={{ color: COLORS.aqua }}>Dipakai untuk jurnal COGS (5-50000 → 1-10200) di setiap penjualan.</span>
+                </div>
+                <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 4 }}>HPP Saat Ini</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: COLORS.warning }}>
+                    {editHpp.hppLama ? `Rp ${editHpp.hppLama.toLocaleString("id-ID")}` : "Belum diset"}
+                  </div>
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 6, display: "block" }}>HPP Baru (Rp)</label>
+                  <input type="number" min="0" style={{ width: "100%", background: COLORS.brownDark, border: `2px solid ${COLORS.warning}`, borderRadius: 8, padding: "12px 14px", fontSize: 18, fontWeight: 700, color: COLORS.cream, outline: "none", boxSizing: "border-box" }}
+                    value={editHpp.hppBaru}
+                    onChange={e => setEditHpp(prev => ({ ...prev, hppBaru: e.target.value }))}
+                    autoFocus
+                    onKeyDown={e => { if (e.key === "Enter") handleEditHpp(editHpp.sku, editHpp.hppBaru); }}
+                  />
+                </div>
+                {editHpp.hppLama > 0 && parseInt(editHpp.hppBaru) > 0 && (
+                  <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 10, marginBottom: 14, fontSize: 12 }}>
+                    <div style={{ color: COLORS.textMuted }}>Gross Margin estimasi:</div>
+                    <div style={{ color: COLORS.success, fontWeight: 700, fontSize: 14 }}>
+                      {(() => {
+                        const item = inventory.find(i => i.sku === editHpp.sku);
+                        const harga = item?.harga || 0;
+                        const hpp = parseInt(editHpp.hppBaru) || 0;
+                        if (!harga || !hpp) return "—";
+                        const margin = ((harga - hpp) / harga * 100).toFixed(1);
+                        return `${margin}% (Rp ${(harga - hpp).toLocaleString("id-ID")} / unit)`;
+                      })()}
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => handleEditHpp(editHpp.sku, editHpp.hppBaru)}
+                    style={{ ...s.btn("primary"), flex: 1, background: COLORS.warning, color: COLORS.brownDark }}>
+                    Simpan HPP
+                  </button>
+                  <button onClick={() => setEditHpp(null)} style={{ ...s.btn("secondary"), flex: 1 }}>Batal</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {editHarga && (
             <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setEditHarga(null)}>
               <div style={{ background: COLORS.brown, borderRadius: 14, padding: 24, width: 400, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" }} onClick={e => e.stopPropagation()}>
@@ -4317,6 +4468,43 @@ END $$;`;
                     <span>LABA BERSIH</span><span>{fmt(netProfit)}</span>
                   </div>
                 </div>
+
+                {/* Inventory Value (Balance Sheet) */}
+                {(() => {
+                  const itemsWithHpp = inventory.filter(i => !i.discontinued && i.hpp > 0);
+                  const itemsNoHpp = inventory.filter(i => !i.discontinued && (!i.hpp || i.hpp === 0));
+                  const totalInvValue = itemsWithHpp.reduce((s, i) => s + (i.hpp * i.stok), 0);
+                  const totalInvQty = inventory.filter(i => !i.discontinued).reduce((s, i) => s + i.stok, 0);
+                  return (
+                    <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginTop: 12, border: `1px solid ${COLORS.warning}40` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.warning }}>📦 Nilai Inventori (1-10200)</div>
+                        <div style={{ fontSize: 11, color: COLORS.textMuted }}>{totalInvQty} unit total stok</div>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13, color: COLORS.cream }}>
+                        <span>Nilai Inventori (qty × HPP)</span>
+                        <span style={{ fontWeight: 700, color: COLORS.warning }}>{fmt(totalInvValue)}</span>
+                      </div>
+                      {itemsNoHpp.length > 0 && (
+                        <div style={{ marginTop: 8, padding: "6px 10px", background: COLORS.warning + "15", borderRadius: 6, fontSize: 11, color: COLORS.warning }}>
+                          ⚠ {itemsNoHpp.length} SKU belum ada HPP — nilai inventori belum akurat.
+                          <span style={{ color: COLORS.textMuted }}> Set HPP di tab Cek Stok.</span>
+                        </div>
+                      )}
+                      {itemsWithHpp.length > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          {itemsWithHpp.sort((a,b) => (b.hpp*b.stok)-(a.hpp*a.stok)).slice(0,5).map(i => (
+                            <div key={i.sku} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0 3px 8px", fontSize: 11, color: COLORS.textMuted }}>
+                              <span>{i.nama} <span style={{ opacity: 0.6 }}>({i.stok} unit)</span></span>
+                              <span style={{ color: COLORS.cream }}>{fmt(i.hpp * i.stok)}</span>
+                            </div>
+                          ))}
+                          {itemsWithHpp.length > 5 && <div style={{ fontSize: 10, color: COLORS.textMuted, paddingLeft: 8, marginTop: 2 }}>+{itemsWithHpp.length-5} SKU lainnya...</div>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
@@ -4365,6 +4553,19 @@ END $$;`;
                   <button onClick={exportPLExcel}
                     style={{ ...s.btn("secondary"), width: "100%", padding: "9px 0", fontSize: 12, fontWeight: 700 }}>
                     📊 P&L Excel (Laba Rugi)
+                  </button>
+                </div>
+
+                {/* COGS Journal */}
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${COLORS.warning}40` }}>
+                  <div style={{ fontWeight: 600, color: COLORS.warning, marginBottom: 4, fontSize: 12 }}>📦 Jurnal Akuntansi Inventory</div>
+                  <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>
+                    Dr. 5-50000 COGS → Cr. 1-10200 Inventory Finished Products<br/>
+                    Butuh HPP per SKU yang sudah diset di tab Cek Stok.
+                  </div>
+                  <button onClick={exportCOGSJournal}
+                    style={{ ...s.btn("secondary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700, border: `1px solid ${COLORS.warning}60`, color: COLORS.warning }}>
+                    📊 COGS Journal Entry Excel
                   </button>
                 </div>
 
