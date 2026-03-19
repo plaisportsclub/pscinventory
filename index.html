@@ -307,13 +307,14 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
           <div style={s.formGroup}>
             <label style={s.label}>Channel Keluar</label>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {[["shopee","🟠","Shopee"],["tokopedia","🟢","Tokopedia"],["tiktok","⬛","TikTok"],["consignment","🏪","Consignment"],["kol","📱","KOL"]].map(([val, icon, lbl]) => (
+              {[["shopee","🟠","Shopee"],["tokopedia","🛒","Tokped/Tiktok"],["consignment","🏪","Consignment"],["b2b","🏢","B2B"],["kol","📱","KOL"],["pinjam","👗","Pinjam Baju"]].map(([val, icon, lbl]) => (
                 <button key={val} onClick={() => set("channel", val)} style={{ ...s.btn(form.channel === val ? "primary" : "secondary"), fontSize: 11, padding: "6px 10px", whiteSpace: "nowrap" }}>{icon} {lbl}</button>
               ))}
             </div>
-            {form.channel === "kol" && <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 6 }}>📱 KOL: stok keluar dicatat sebagai marketing expense, tidak ada income.</div>}
-            {(form.channel === "consignment" || form.channel === "b2b") && <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6 }}>💡 Stok keluar dicatat. Catat income-nya di tab Keuangan → Pemasukan saat uang masuk.</div>}
-            {isMkt(form.channel) && <div style={{ fontSize: 11, color: COLORS.aqua, marginTop: 6 }}>🛒 Isi harga jual & no. order marketplace di bawah. Income dicatat di Pemasukan saat settlement cair.</div>}
+            {form.channel === "kol" && <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 6 }}>📱 KOL: stok keluar, dicatat sebagai Marketing Expense (6-60007). Tidak ada income.</div>}
+            {form.channel === "pinjam" && <div style={{ fontSize: 11, color: "#E8A0BF", marginTop: 6 }}>👗 Pinjam Baju: stok keluar sementara. Isi nama peminjam di bawah. Barang bisa dikembalikan di tab Peminjaman.</div>}
+            {(form.channel === "consignment" || form.channel === "b2b") && <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6 }}>💡 Stok keluar dicatat (4-40000, tag: {CHANNEL_TAGS[form.channel]}). Catat income di Tab Keuangan → Pemasukan saat uang masuk.</div>}
+            {isMkt(form.channel) && form.channel !== "pinjam" && form.channel !== "kol" && <div style={{ fontSize: 11, color: COLORS.aqua, marginTop: 6 }}>🛒 Tag Jurnal: {CHANNEL_TAGS[form.channel] || "-"}. Income dicatat di Pemasukan saat settlement cair.</div>}
           </div>
 
           {/* Marketplace extra fields */}
@@ -375,7 +376,7 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
         </>
       )}
 
-      {tipe === "pinjam" && (
+      {(tipe === "pinjam" || form.channel === "pinjam") && (
         <div style={s.formGroup}>
           <label style={s.label}>Nama Peminjam</label>
           <input style={s.input} placeholder="Nama member / tamu" value={form.peminjam} onChange={e => set("peminjam", e.target.value)} />
@@ -460,7 +461,7 @@ function PlaiInventory() {
   const [kasirShipCost, setKasirShipCost] = useState("");
   const [kasirMarketplace, setKasirMarketplace] = useState(false);
   const [kasirPelangganShipCost, setKasirPelangganShipCost] = useState("");
-  const [kasirChannel, setKasirChannel] = useState("terjual");
+  const [kasirChannel, setKasirChannel] = useState("event");
 
   // Multi-SKU invoice mode for Barang Keluar
   const [invoiceMode, setInvoiceMode] = useState(false);
@@ -977,33 +978,40 @@ function PlaiInventory() {
   // Only direct + event get auto-income at Barang Keluar
   // Marketplace/consignment/b2b income recorded separately in Tab Pemasukan
   const CHANNEL_SOURCE_MAP = {
-    // Kasir channels — income auto-created
-    terjual: "b2c_direct", direct: "b2c_direct",
-    wa: "b2c_direct", dm: "b2c_direct", web: "b2c_direct",
-    event: "event",
-    // shopee/tokopedia/tiktok/consignment/kol: income via Tab Pemasukan only
+    // Kasir channels — income auto-created on sale
+    event: "b2c_direct", wa: "b2c_direct", dm: "b2c_direct", web: "b2c_direct",
+    // shopee/tokopedia/consignment/b2b: income via Tab Pemasukan only
+    // kol/pinjam: no income
   };
+  // All revenue channels → single COA 4-40000 (REVENUE PRODUCT)
   const CHANNEL_REVENUE_MAP = {
-    terjual: "4-40000", direct: "4-40000",
-    wa: "4-40000", dm: "4-40000", web: "4-40000",
-    shopee: "4-40003", tokopedia: "4-40003", tiktok: "4-40003",
-    event: "4-40002",
-    consignment: "4-40004",
-    b2b: "4-40005"
+    event: "4-40000", wa: "4-40000", dm: "4-40000", web: "4-40000",
+    shopee: "4-40000", tokopedia: "4-40000", tiktok: "4-40000",
+    consignment: "4-40000", b2b: "4-40000",
+  };
+  // Jurnal.id tags per channel
+  const CHANNEL_TAGS = {
+    event: "Event; Offline B2C",
+    web: "Shopify; Online B2C",
+    wa: "WA; Online B2C",
+    dm: "DM; Online B2C",
+    shopee: "Shopee; Online B2C",
+    tokopedia: "Tokopedia; Online B2C",
+    tiktok: "Tokopedia; Online B2C",
+    consignment: "Consignment",
+    b2b: "B2B",
   };
   const CHANNEL_LABELS = {
-    terjual: "Direct Online", direct: "Direct Online",
-    wa: "WA Order", dm: "DM Order", web: "Website",
-    shopee: "Shopee", tokopedia: "Tokopedia", tiktok: "TikTok",
-    event: "Event/Bazaar", kol: "KOL",
+    event: "Walk in/Event", wa: "WA Order", dm: "DM Order", web: "Website",
+    shopee: "Shopee", tokopedia: "Tokped/Tiktok", tiktok: "TikTok",
+    kol: "KOL", pinjam: "Pinjam Baju",
     consignment: "Consignment", b2b: "B2B"
   };
   const CHANNEL_COLORS = {
-    terjual: "#4ECDC4", direct: "#4ECDC4",
-    wa: "#25D366", dm: "#C13584", web: "#4ECDC4",
+    event: "#F7DC6F", wa: "#25D366", dm: "#C13584", web: "#4ECDC4",
     shopee: "#FF6B35", tokopedia: "#45B649",
-    tiktok: "#FF0050", event: "#F7DC6F",
-    kol: "#F0A500", consignment: "#9B59B6", b2b: "#3498DB"
+    tiktok: "#FF0050",
+    kol: "#F0A500", pinjam: "#E8A0BF", consignment: "#9B59B6", b2b: "#3498DB"
   };
 
   // Delete transaction + revert stock + revert shipping expense
@@ -1059,6 +1067,34 @@ function PlaiInventory() {
     sbUpsertInventory(data.sku, newStok);
     sbInsertTx(tx);
 
+    // Pinjam Baju: delegate to handlePinjam, no income/expense
+    if (data.channel === "pinjam") {
+      handlePinjam(data);
+      return;
+    }
+
+    // KOL: auto-create marketing expense (6-60007), no income
+    if (data.channel === "kol") {
+      const ts = Date.now();
+      const dateStr = (data.tanggal || new Date().toISOString().split("T")[0]).replace(/-/g, "");
+      const kolExp = {
+        id: ts,
+        date: data.tanggal || new Date().toISOString().split("T")[0],
+        expense_number: `EXP-${dateStr}-${String(ts).slice(-4)}`,
+        from_account_code: "1-10002-2",
+        account_code: "6-60007",
+        account_name: "KOL & PR Package",
+        description: `KOL/PR: ${data.nama} x${data.jumlah}${data.catatan ? " — " + data.catatan : ""}`,
+        amount: (item?.harga || 0) * data.jumlah,
+        payment_method: "transfer",
+        recipient: data.catatan || "KOL/Influencer",
+        tags: "KOL; Marketing"
+      };
+      setExpenses(prev => [kolExp, ...prev]);
+      if (sbClient) sbClient.from('expenses').insert([kolExp]);
+      return;
+    }
+
     // Auto-create income record for revenue-generating channels
     const source = CHANNEL_SOURCE_MAP[data.channel];
     if (source) {
@@ -1071,8 +1107,9 @@ function PlaiInventory() {
         date: data.tanggal || new Date().toISOString().split("T")[0],
         income_number: `INC-${dateStr}-${String(ts).slice(-4)}`,
         source,
-        revenue_account_code: CHANNEL_REVENUE_MAP[data.channel],
+        revenue_account_code: "4-40000",
         channel: data.channel,
+        tags: CHANNEL_TAGS[data.channel] || "",
         description: `Penjualan ${data.nama} x${data.jumlah}${data.catatan ? " — " + data.catatan : ""}`,
         amount: incomeAmount,
         payment_method: "transfer",
@@ -1569,8 +1606,9 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       date: mktSettleDate,
       income_number: `INC-${dateStr}-${String(ts).slice(-4)}`,
       source: "marketplace",
-      revenue_account_code: "4-40003",
+      revenue_account_code: "4-40000",
       channel: mktSettlePlatform,
+      tags: CHANNEL_TAGS[mktSettlePlatform] || mktSettlePlatform,
       description: `Settlement ${mktSettlePlatform}${mktSettleRef ? " · " + mktSettleRef : ""}${mktSettleNotes ? " · " + mktSettleNotes : ""}`,
       amount: parseRp(mktSettleAmount) || 0,
       payment_method: "transfer",
@@ -1602,7 +1640,8 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       date: consDate,
       income_number: `INC-${dateStr}-${String(ts).slice(-4)}`,
       source: "consignment",
-      revenue_account_code: "4-40004",
+      revenue_account_code: "4-40000",
+      tags: CHANNEL_TAGS["consignment"] || "Consignment",
       channel: consToko,
       description: `Consignment ${consProduk} x${qty} @ ${consToko} (fee ${fee}%)${consRef ? ` | Ref: ${consRef}` : ""}`,
       amount: netRevenue,
@@ -1676,14 +1715,16 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const now = new Date();
     const today = now.toISOString().split("T")[0];
     if (period === "semua") return items;
-    if (period === "hari") return items.filter(i => i.date === today);
+    // Support both date (incomes/expenses) and tanggal (transactions)
+    const getD = (i) => i.date || i.tanggal || "";
+    if (period === "hari") return items.filter(i => getD(i) === today);
     if (period === "minggu") {
       const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
-      return items.filter(i => new Date(i.date) >= weekAgo);
+      return items.filter(i => new Date(getD(i)) >= weekAgo);
     }
     if (period === "bulan") {
       const monthStart = today.substring(0, 7);
-      return items.filter(i => i.date && i.date.substring(0, 7) === monthStart);
+      return items.filter(i => getD(i) && getD(i).substring(0, 7) === monthStart);
     }
     return items;
   };
@@ -1718,14 +1759,13 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       return d;
     };
     // Helper: map source to revenue account code (Jurnal.id COA)
-    const revenueAccCode = (i) => {
-      if (i.revenue_account_code) return i.revenue_account_code;
-      const s = (i.source || "").toLowerCase();
-      if (s === "event") return "4-40002";
-      if (s === "marketplace") return "4-40003";
-      if (s === "consignment") return "4-40004";
-      if (s === "b2b") return "4-40005";
-      return "4-40000"; // default: Direct Online
+    // All channels unified to 4-40000 Revenue Product; channel differentiation via Tags
+    const revenueAccCode = () => "4-40000";
+    // Helper: get Jurnal.id tag for income record
+    const revenueTag = (i) => {
+      if (i.tags) return i.tags;
+      const ch = (i.channel || "").toLowerCase();
+      return CHANNEL_TAGS[ch] || ch || "";
     };
 
     // ── SHEET 1: Expense Import (Jurnal.id format) ──
@@ -1766,7 +1806,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
         fmtPayMethod(i.payment_method),
         "",
         "",
-        [revenueAccCode(i), i.channel || ""].filter(Boolean).join(";")
+        revenueTag(i)
       ])
     ];
     const ws2 = XLSX.utils.aoa_to_sheet(rpRows);
@@ -1784,11 +1824,11 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
 
     // ── SHEET 4: Raw Incomes (internal reference) ──
     const incRows = [
-      ["Tanggal", "No. Income", "Sumber", "Channel", "Revenue Account", "Deskripsi", "Jumlah", "Metode Bayar", "Customer", "Pay To Account"],
-      ...filteredInc.map(i => [i.date, incNum(i), i.source, i.channel, revenueAccCode(i), i.description, i.amount, i.payment_method, i.customer, i.pay_to_account_code || fromAccCode(i.payment_method)])
+      ["Tanggal", "No. Income", "Sumber", "Channel", "Revenue Account", "Tags", "Deskripsi", "Jumlah", "Metode Bayar", "Customer", "Pay To Account"],
+      ...filteredInc.map(i => [i.date, incNum(i), i.source, i.channel, revenueAccCode(), revenueTag(i), i.description, i.amount, i.payment_method, i.customer, i.pay_to_account_code || fromAccCode(i.payment_method)])
     ];
     const ws4 = XLSX.utils.aoa_to_sheet(incRows);
-    ws4["!cols"] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 16 }];
+    ws4["!cols"] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 22 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 16 }];
     XLSX.utils.book_append_sheet(wb, ws4, "Incomes");
 
     const totalExpByAccount = {};
@@ -1832,6 +1872,61 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const periodLabel = keuanganPeriod === "semua" ? "AllPeriod" : keuanganPeriod;
     XLSX.writeFile(wb, `Plai_JurnalID_${periodLabel}_${dateStr}.xlsx`);
     showToast("✓ Excel exported!");
+  };
+
+  // Export Expense as CSV (Jurnal.id direct import format)
+  const exportExpenseCSV = () => {
+    const filteredExp = filterByPeriod(expenses, keuanganPeriod);
+    const fmtPayMethod = (m) => {
+      if (!m) return "Transfer";
+      if (m === "cash" || m === "tunai") return "Cash";
+      if (m === "ewallet" || m === "gopay" || m === "ovo" || m === "dana") return "Cash";
+      return "Transfer";
+    };
+    const fromAccCode = (m) => (m === "cash" || m === "tunai" || m === "ewallet") ? "1-10001" : "1-10002-2";
+    const expNum = (e) => e.expense_number || `EXP-${(e.date || "").replace(/-/g, "").substring(0, 8)}-${String(e.id || "").slice(-4)}`;
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const parts = d.split("-");
+      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      return d;
+    };
+
+    const header = ["*FromAccountNumber", "Beneficiery", "Address", "*ExpenseDate", "*ExpenseNumber", "*PaymentMethod", "*ExpenseAccount", "Description", "TaxName", "TaxRate", "*Amount", "#PayLater?(yes/no)", "#DueDate", "Tags"];
+    const rows = filteredExp.map(e => [
+      fromAccCode(e.payment_method),
+      e.recipient || "",
+      "",
+      fmtDate(e.date),
+      expNum(e),
+      fmtPayMethod(e.payment_method),
+      e.account_code || "",
+      e.description || "",
+      "",
+      "",
+      e.amount || 0,
+      "no",
+      "",
+      ""
+    ]);
+
+    const csvContent = [header, ...rows].map(row =>
+      row.map(cell => {
+        const val = String(cell ?? "");
+        return val.includes(",") || val.includes('"') || val.includes("\n") ? `"${val.replace(/"/g, '""')}"` : val;
+      }).join(",")
+    ).join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const dateStr = new Date().toISOString().split("T")[0];
+    const periodLabel = keuanganPeriod === "semua" ? "AllPeriod" : keuanganPeriod;
+    a.href = url;
+    a.download = `Plai_Expense_JurnalID_${periodLabel}_${dateStr}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`✓ CSV exported! (${rows.length} expenses)`);
   };
 
   // ── PAGES ────────────────────────────────────────────────────────────────────
@@ -2515,10 +2610,11 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                   <label style={s.label}>Channel</label>
                   <select style={s.select} value={invoiceChannel} onChange={e => setInvoiceChannel(e.target.value)}>
                     <option value="shopee">🟠 Shopee</option>
-                    <option value="tokopedia">🟢 Tokopedia</option>
-                    <option value="tiktok">⬛ TikTok</option>
+                    <option value="tokopedia">🟢 Tokped/Tiktok</option>
                     <option value="consignment">🏪 Consignment</option>
+                    <option value="b2b">🏢 B2B</option>
                     <option value="kol">📱 KOL</option>
+                    <option value="pinjam">👗 Pinjam Baju</option>
                   </select>
                 </div>
                 <div style={s.formGroup}>
@@ -3726,17 +3822,14 @@ END $$;`;
               <div style={{ marginBottom: 12 }}>
                 <label style={{ ...s.label, marginBottom: 6 }}>📣 Channel</label>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {[["terjual","🛒","Walk-in"], ["wa","💬","WA"], ["dm","📸","DM"], ["web","🌐","Web"], ["event","🎪","Bazaar"]].map(([val, icon, lbl]) => (
+                  {[["event","🛍️","Walk in/Event"], ["web","🌐","Web"], ["wa","💬","WA"], ["dm","📸","DM"]].map(([val, icon, lbl]) => (
                     <button key={val} onClick={() => setKasirChannel(val)}
                       style={{ ...s.btn(kasirChannel === val ? "primary" : "secondary"), flex: 1, fontSize: 11, padding: "7px 3px" }}>{icon} {lbl}</button>
                   ))}
                 </div>
-                {kasirChannel === "event" && (
-                  <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 4 }}>🎪 Income tercatat sebagai Event/Bazaar (4-40002)</div>
-                )}
-                {["terjual","wa","dm","web"].includes(kasirChannel) && (
-                  <div style={{ fontSize: 11, color: COLORS.aqua, marginTop: 4 }}>Income tercatat sebagai Direct (4-40000)</div>
-                )}
+                <div style={{ fontSize: 11, color: COLORS.aqua, marginTop: 4 }}>
+                  ✓ Revenue Product (4-40000) · Tag: {CHANNEL_TAGS[kasirChannel] || "-"}
+                </div>
               </div>
 
               {/* Staff */}
@@ -4200,7 +4293,7 @@ END $$;`;
             <div>
               <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, border: `1px solid ${COLORS.brownLight}` }}>
                 <h3 style={{ color: COLORS.aqua, marginBottom: 8, fontSize: 15 }}>📁 Export ke Excel</h3>
-                <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Export data keuangan dalam format yang compatible dengan Jurnal.id. File Excel berisi 4 sheet: Journal entries, Detail Expense, Detail Income, dan P&L summary.</p>
+                <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Export data keuangan dalam format yang compatible dengan Jurnal.id. Semua revenue menggunakan akun <strong style={{ color: COLORS.aqua }}>4-40000 Revenue Product</strong> dengan diferensiasi channel via Tags.</p>
 
                 <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 16 }}>
                   <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 6 }}>Periode export:</div>
@@ -4211,17 +4304,25 @@ END $$;`;
                 </div>
 
                 <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 12, color: COLORS.textMuted }}>
-                  <div style={{ fontWeight: 600, color: COLORS.cream, marginBottom: 4 }}>Sheet yang akan di-export:</div>
-                  <div>1. <strong style={{ color: COLORS.aqua }}>Journal</strong> — Format jurnal entry (Debit/Credit) siap import ke Jurnal.id</div>
-                  <div>2. <strong style={{ color: COLORS.aqua }}>Expenses</strong> — Detail semua pengeluaran</div>
-                  <div>3. <strong style={{ color: COLORS.aqua }}>Incomes</strong> — Detail pemasukan non-kasir</div>
-                  <div>4. <strong style={{ color: COLORS.aqua }}>P&L</strong> — Ringkasan laba rugi</div>
+                  <div style={{ fontWeight: 600, color: COLORS.cream, marginBottom: 4 }}>Sheet yang akan di-export (Excel):</div>
+                  <div>1. <strong style={{ color: COLORS.aqua }}>Expense Import</strong> — Siap upload ke Jurnal.id → Expense → Import</div>
+                  <div>2. <strong style={{ color: COLORS.aqua }}>Receive Payment Import</strong> — Income (COA 4-40000 + Tags per channel)</div>
+                  <div>3. <strong style={{ color: COLORS.aqua }}>Expenses</strong> — Raw detail pengeluaran (referensi internal)</div>
+                  <div>4. <strong style={{ color: COLORS.aqua }}>Incomes</strong> — Raw detail pemasukan + Tags (referensi internal)</div>
+                  <div>5. <strong style={{ color: COLORS.aqua }}>P&L</strong> — Ringkasan laba rugi</div>
                 </div>
 
                 <button onClick={exportKeuanganExcel}
-                  style={{ ...s.btn("primary"), width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 800 }}>
+                  style={{ ...s.btn("primary"), width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 800, marginBottom: 10 }}>
                   📥 Download Excel (Jurnal.id Format)
                 </button>
+                <button onClick={exportExpenseCSV}
+                  style={{ ...s.btn("success"), width: "100%", padding: "11px 0", fontSize: 14, fontWeight: 700 }}>
+                  📄 Download Expense CSV (Import Jurnal.id)
+                </button>
+                <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6, textAlign: "center" }}>
+                  CSV siap upload langsung ke Jurnal.id → Expense → Import
+                </div>
               </div>
 
               {/* SQL Setup info */}
@@ -4262,6 +4363,42 @@ CREATE POLICY "anon_all_incomes" ON incomes
                 <button onClick={() => { navigator.clipboard.writeText(`CREATE TABLE IF NOT EXISTS expenses (\n  id bigint PRIMARY KEY,\n  date date NOT NULL DEFAULT current_date,\n  account_code text NOT NULL,\n  account_name text NOT NULL,\n  description text,\n  amount bigint NOT NULL DEFAULT 0,\n  payment_method text DEFAULT 'transfer',\n  recipient text,\n  created_at timestamptz DEFAULT now()\n);\nALTER TABLE expenses ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "anon_all_expenses" ON expenses\n  FOR ALL USING (true) WITH CHECK (true);\n\nCREATE TABLE IF NOT EXISTS incomes (\n  id bigint PRIMARY KEY,\n  date date NOT NULL DEFAULT current_date,\n  source text NOT NULL DEFAULT 'marketplace',\n  channel text,\n  description text,\n  amount bigint NOT NULL DEFAULT 0,\n  payment_method text DEFAULT 'transfer',\n  customer text,\n  created_at timestamptz DEFAULT now()\n);\nALTER TABLE incomes ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "anon_all_incomes" ON incomes\n  FOR ALL USING (true) WITH CHECK (true);`); showToast("✓ SQL disalin ke clipboard!"); }}
                   style={{ ...s.btn("primary"), marginTop: 8, fontSize: 12, padding: "8px 16px" }}>
                   📋 Copy SQL
+                </button>
+              </div>
+
+              {/* Backfill SQL */}
+              <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginTop: 16, border: `1px solid ${COLORS.brownLight}` }}>
+                <h3 style={{ color: COLORS.warning, marginBottom: 8, fontSize: 14 }}>🔄 Backfill Revenue COA ke 4-40000</h3>
+                <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>Update semua income lama di Supabase agar revenue_account_code = "4-40000" (unifikasi COA):</p>
+                <pre style={{ background: COLORS.brown, borderRadius: 8, padding: 10, fontSize: 10, color: COLORS.cream, overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+{`-- Backfill: unify all income records to COA 4-40000
+UPDATE incomes
+SET revenue_account_code = '4-40000'
+WHERE revenue_account_code IS NULL
+   OR revenue_account_code != '4-40000';
+
+-- Add tags column if not exists
+ALTER TABLE incomes ADD COLUMN IF NOT EXISTS tags text;
+ALTER TABLE incomes ADD COLUMN IF NOT EXISTS revenue_account_code text DEFAULT '4-40000';
+
+-- Backfill tags from channel
+UPDATE incomes SET tags = CASE
+  WHEN channel = 'event'       THEN 'Event; Offline B2C'
+  WHEN channel = 'web'         THEN 'Shopify; Online B2C'
+  WHEN channel = 'wa'          THEN 'WA; Online B2C'
+  WHEN channel = 'dm'          THEN 'DM; Online B2C'
+  WHEN channel = 'shopee'      THEN 'Shopee; Online B2C'
+  WHEN channel = 'tokopedia'   THEN 'Tokopedia; Online B2C'
+  WHEN channel = 'tiktok'      THEN 'Tokopedia; Online B2C'
+  WHEN channel = 'consignment' THEN 'Consignment'
+  WHEN channel = 'b2b'         THEN 'B2B'
+  ELSE channel
+END
+WHERE tags IS NULL;`}
+                </pre>
+                <button onClick={() => { navigator.clipboard.writeText(`-- Backfill: unify all income records to COA 4-40000\nUPDATE incomes\nSET revenue_account_code = '4-40000'\nWHERE revenue_account_code IS NULL\n   OR revenue_account_code != '4-40000';\n\nALTER TABLE incomes ADD COLUMN IF NOT EXISTS tags text;\nALTER TABLE incomes ADD COLUMN IF NOT EXISTS revenue_account_code text DEFAULT '4-40000';\n\nUPDATE incomes SET tags = CASE\n  WHEN channel = 'event'       THEN 'Event; Offline B2C'\n  WHEN channel = 'web'         THEN 'Shopify; Online B2C'\n  WHEN channel = 'wa'          THEN 'WA; Online B2C'\n  WHEN channel = 'dm'          THEN 'DM; Online B2C'\n  WHEN channel = 'shopee'      THEN 'Shopee; Online B2C'\n  WHEN channel = 'tokopedia'   THEN 'Tokopedia; Online B2C'\n  WHEN channel = 'tiktok'      THEN 'Tokopedia; Online B2C'\n  WHEN channel = 'consignment' THEN 'Consignment'\n  WHEN channel = 'b2b'         THEN 'B2B'\n  ELSE channel\nEND\nWHERE tags IS NULL;`); showToast("✓ Backfill SQL disalin!"); }}
+                  style={{ ...s.btn("warning"), marginTop: 8, fontSize: 12, padding: "8px 16px" }}>
+                  📋 Copy Backfill SQL
                 </button>
               </div>
             </div>
