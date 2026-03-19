@@ -311,7 +311,19 @@ const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, 
                 <button key={val} onClick={() => set("channel", val)} style={{ ...s.btn(form.channel === val ? "primary" : "secondary"), fontSize: 11, padding: "6px 10px", whiteSpace: "nowrap" }}>{icon} {lbl}</button>
               ))}
             </div>
-            {form.channel === "kol" && <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 6 }}>📱 KOL: stok keluar, dicatat sebagai Marketing Expense (6-60007). Tidak ada income.</div>}
+            {form.channel === "kol" && (
+              <div style={{ marginTop: 8, background: COLORS.brownDark, borderRadius: 8, padding: 12, border: `1px solid ${COLORS.warning}40` }}>
+                <div style={{ fontSize: 11, color: COLORS.warning, marginBottom: 8, fontWeight: 600 }}>📱 KOL: stok keluar → Dr. 6-60007 KOL &amp; PR Package</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>
+                  Produk: Cr. 1-10200 Inventory (@ HPP)<br/>
+                  Ongkir: Cr. 1-10002-2 Bank BCA Gaby
+                </div>
+                <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Ongkir ke KOL (Rp) — opsional</label>
+                <input style={s.input} type="number" min="0" placeholder="cth: 25000" value={form.shippingCost} onChange={e => set("shippingCost", e.target.value)} />
+                <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3, marginTop: 8 }}>Nama KOL / Influencer</label>
+                <input style={s.input} type="text" placeholder="cth: @bella_scholastica" value={form.catatan} onChange={e => set("catatan", e.target.value)} />
+              </div>
+            )}
             {form.channel === "pinjam" && <div style={{ fontSize: 11, color: "#E8A0BF", marginTop: 6 }}>👗 Pinjam Baju: stok keluar sementara. Isi nama peminjam di bawah. Barang bisa dikembalikan di tab Peminjaman.</div>}
             {(form.channel === "consignment" || form.channel === "b2b") && <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6 }}>💡 Stok keluar dicatat (4-40000, tag: {CHANNEL_TAGS[form.channel]}). Catat income di Tab Keuangan → Pemasukan saat uang masuk.</div>}
             {isMkt(form.channel) && form.channel !== "pinjam" && form.channel !== "kol" && <div style={{ fontSize: 11, color: COLORS.aqua, marginTop: 6 }}>🛒 Tag Jurnal: {CHANNEL_TAGS[form.channel] || "-"}. Income dicatat di Pemasukan saat settlement cair.</div>}
@@ -1079,24 +1091,50 @@ function PlaiInventory() {
     sbInsertTx(tx);
 
     // KOL: auto-create marketing expense (6-60007), no income
+    // Entry 1: Produk (Dr. 6-60007 / Cr. 1-10200 Inventory) — pakai HPP bukan harga jual
+    // Entry 2: Ongkir (Dr. 6-60007 / Cr. 1-10002-2 Bank) — jika ada ongkir
     if (data.channel === "kol") {
       const ts = Date.now();
       const dateStr = (data.tanggal || new Date().toISOString().split("T")[0]).replace(/-/g, "");
-      const kolExp = {
+      const hpp = item?.hpp || 0;
+      const hppAmt = hpp * data.jumlah;
+      const ongkir = parseInt(data.shippingCost) || 0;
+      const kolName = data.catatan || "KOL/Influencer";
+      const toInsert = [];
+      // Entry 1: Produk keluar dari inventory (Cr. 1-10200)
+      const kolProdExp = {
         id: ts,
         date: data.tanggal || new Date().toISOString().split("T")[0],
-        expense_number: `EXP-${dateStr}-${String(ts).slice(-4)}`,
-        from_account_code: "1-10002-2",
+        expense_number: `KOL-${dateStr}-${String(ts).slice(-4)}`,
+        from_account_code: "1-10200",
         account_code: "6-60007",
         account_name: "KOL & PR Package",
-        description: `KOL/PR: ${data.nama} x${data.jumlah}${data.catatan ? " — " + data.catatan : ""}`,
-        amount: (item?.harga || 0) * data.jumlah,
+        description: `KOL Produk: ${data.nama} x${data.jumlah} HPP@${hpp.toLocaleString("id-ID")} — ${kolName}`,
+        amount: hppAmt,
         payment_method: "transfer",
-        recipient: data.catatan || "KOL/Influencer",
-        tags: "KOL; Marketing"
+        recipient: kolName,
+        tags: "KOL; Marketing; INVENTORY-OUT"
       };
-      setExpenses(prev => [kolExp, ...prev]);
-      if (sbClient) sbClient.from('expenses').insert([kolExp]);
+      toInsert.push(kolProdExp);
+      // Entry 2: Ongkir keluar dari bank (Cr. 1-10002-2)
+      if (ongkir > 0) {
+        toInsert.push({
+          id: ts + 1,
+          date: data.tanggal || new Date().toISOString().split("T")[0],
+          expense_number: `KOL-${dateStr}-${String(ts+1).slice(-4)}`,
+          from_account_code: "1-10002-2",
+          account_code: "6-60007",
+          account_name: "KOL & PR Package",
+          description: `KOL Ongkir: ${kolName}`,
+          amount: ongkir,
+          payment_method: "transfer",
+          recipient: kolName,
+          tags: "KOL; Marketing; ONGKIR"
+        });
+      }
+      setExpenses(prev => [...toInsert, ...prev]);
+      if (sbClient) sbClient.from('expenses').insert(toInsert);
+      showToast(`✓ KOL dicatat — Produk HPP Rp ${hppAmt.toLocaleString("id-ID")}${ongkir > 0 ? ` + Ongkir Rp ${ongkir.toLocaleString("id-ID")}` : ""}`);
       return;
     }
 
@@ -1942,6 +1980,66 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     XLSX.writeFile(wb, `Plai_COGS_Journal_${getPeriodLabel()}_${getDateStr()}.xlsx`);
     const totalCOGS = Object.values(hppMap).reduce((s,d)=>s+d.total,0);
     showToast(`✓ COGS Journal: ${journalRows.length/2} entries · Total Rp ${totalCOGS.toLocaleString("id-ID")}${noHppSkus.size>0?" · ⚠ "+noHppSkus.size+" SKU skip (no HPP)":""}`);
+  };
+
+  // ── Export 7: KOL Journal Entry (Dr. 6-60007 / Cr. 1-10200 atau 1-10002-2) ──
+  const exportKOLJournal = () => {
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const parts = d.split("-");
+      return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : d;
+    };
+    const kolExps = filterByPeriod(
+      expenses.filter(e => e.account_code === "6-60007" && (e.tags || "").includes("KOL")),
+      keuanganPeriod
+    );
+    if (kolExps.length === 0) {
+      showToast("⚠ Tidak ada transaksi KOL di periode ini.", "warning");
+      return;
+    }
+    const journalRows = [];
+    let totalProduk = 0, totalOngkir = 0;
+    kolExps.forEach((e, i) => {
+      const amt = e.amount || 0;
+      const ref = e.expense_number || `KOL-${(e.date||"").replace(/-/g,"").slice(0,8)}-${i}`;
+      const memo = e.description || "KOL & PR Package";
+      const creditAcc = e.from_account_code === "1-10200" ? "1-10200" : "1-10002-2";
+      const creditName = e.from_account_code === "1-10200" ? "Inventory Finished Products" : "Bank BCA Gaby";
+      // Debit: 6-60007
+      journalRows.push([fmtDate(e.date), ref, memo, "6-60007", "KOL & PR Package", amt, "", e.date]);
+      // Credit: inventory atau bank
+      journalRows.push([fmtDate(e.date), ref, memo, creditAcc, creditName, "", amt, e.date]);
+      if (e.from_account_code === "1-10200") totalProduk += amt;
+      else totalOngkir += amt;
+    });
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["*Date","*Reference","*Memo","*AccountCode","AccountName","*Debit","*Credit","DateISO"],
+      ...journalRows
+    ]);
+    ws["!cols"]=[{wch:12},{wch:24},{wch:44},{wch:14},{wch:30},{wch:14},{wch:14},{wch:12}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "KOL Journal");
+    // Summary sheet
+    const summaryRows = [
+      ["KOL Journal Summary — " + getPeriodLabel()],[],
+      ["Keterangan","Jumlah"],
+      ["Total Nilai Produk (HPP)", totalProduk],
+      ["Total Ongkir KOL", totalOngkir],
+      ["TOTAL KOL & PR Package", totalProduk + totalOngkir],
+      [],[],
+      ["Detail Transaksi"],
+      ["Tanggal","Referensi","Keterangan","Cr. Account","Jumlah"],
+      ...kolExps.map(e => [
+        e.date, e.expense_number, e.description,
+        e.from_account_code === "1-10200" ? "Inventory (HPP)" : "Bank BCA",
+        e.amount
+      ])
+    ];
+    const ws2 = XLSX.utils.aoa_to_sheet(summaryRows);
+    ws2["!cols"]=[{wch:14},{wch:24},{wch:44},{wch:20},{wch:14}];
+    XLSX.utils.book_append_sheet(wb, ws2, "KOL Summary");
+    XLSX.writeFile(wb, `Plai_KOL_Journal_${getPeriodLabel()}_${getDateStr()}.xlsx`);
+    showToast(`✓ KOL Journal: ${kolExps.length} entries · Produk Rp ${totalProduk.toLocaleString("id-ID")} · Ongkir Rp ${totalOngkir.toLocaleString("id-ID")}`);
   };
 
   // ── Export Semua: all 5 sheets in one Excel ──
@@ -4566,6 +4664,20 @@ END $$;`;
                   <button onClick={exportCOGSJournal}
                     style={{ ...s.btn("secondary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700, border: `1px solid ${COLORS.warning}60`, color: COLORS.warning }}>
                     📊 COGS Journal Entry Excel
+                  </button>
+                </div>
+
+                {/* KOL Journal */}
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid #F0A50040` }}>
+                  <div style={{ fontWeight: 600, color: "#F0A500", marginBottom: 4, fontSize: 12 }}>📱 Jurnal KOL & PR Package</div>
+                  <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>
+                    Dr. 6-60007 KOL &amp; PR Package<br/>
+                    → Cr. 1-10200 Inventory (produk @ HPP)<br/>
+                    → Cr. 1-10002-2 Bank BCA (ongkir)
+                  </div>
+                  <button onClick={exportKOLJournal}
+                    style={{ ...s.btn("secondary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700, border: `1px solid #F0A50060`, color: "#F0A500" }}>
+                    📱 KOL Journal Entry Excel
                   </button>
                 </div>
 
