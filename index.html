@@ -59,12 +59,12 @@ const INITIAL_INVENTORY = [
 ];
 
 const INITIAL_TRANSACTIONS = [
-  { id: 1, tanggal: "2025-03-10", sku: "PLI-FUT-001", nama: "Bola Futsal Ukuran 4", tipe: "keluar", jumlah: 2, harga: 150000, channel: "terjual", shipping: "pelanggan", shippingCost: 0, catatan: "", staff: "Sinta" },
+  { id: 1, tanggal: "2025-03-10", sku: "PLI-FUT-001", nama: "Bola Futsal Ukuran 4", tipe: "keluar", jumlah: 2, harga: 150000, channel: "event", shipping: "pelanggan", shippingCost: 0, catatan: "", staff: "Sinta" },
   { id: 2, tanggal: "2025-03-10", sku: "PLI-BAD-002", nama: "Shuttlecock Feather", tipe: "keluar", jumlah: 5, harga: 35000, channel: "event", shipping: "none", shippingCost: 0, catatan: "Event Badminton Cup", staff: "Bella" },
   { id: 3, tanggal: "2025-03-09", sku: "PLI-GYM-003", nama: "Resistance Band Set", tipe: "keluar", jumlah: 2, harga: 85000, channel: "kol", shipping: "plai", shippingCost: 25000, catatan: "KOL @fitnessbro", staff: "Sinta" },
-  { id: 4, tanggal: "2025-03-09", sku: "PLI-FUT-002", nama: "Bola Futsal Ukuran 5", tipe: "keluar", jumlah: 3, harga: 175000, channel: "terjual", shipping: "pelanggan", shippingCost: 0, catatan: "", staff: "Gabby" },
+  { id: 4, tanggal: "2025-03-09", sku: "PLI-FUT-002", nama: "Bola Futsal Ukuran 5", tipe: "keluar", jumlah: 3, harga: 175000, channel: "wa", shipping: "pelanggan", shippingCost: 0, catatan: "", staff: "Gabby" },
   { id: 5, tanggal: "2025-03-08", sku: "PLI-RTL-001", nama: "Kaos Plai Sports", tipe: "masuk", jumlah: 10, harga: 120000, channel: "-", shipping: "none", shippingCost: 0, catatan: "Restock dari supplier", staff: "Sinta" },
-  { id: 6, tanggal: "2025-03-08", sku: "PLI-TEN-001", nama: "Bola Tenis", tipe: "keluar", jumlah: 6, harga: 25000, channel: "terjual", shipping: "plai", shippingCost: 18000, catatan: "", staff: "Bella" },
+  { id: 6, tanggal: "2025-03-08", sku: "PLI-TEN-001", nama: "Bola Tenis", tipe: "keluar", jumlah: 6, harga: 25000, channel: "event", shipping: "plai", shippingCost: 18000, catatan: "", staff: "Bella" },
 ];
 
 const INITIAL_PINJAM = [
@@ -492,7 +492,7 @@ function PlaiInventory() {
   const [scanResult, setScanResult] = useState(null);
   const [scanMode, setScanMode] = useState("keluar");
   const [scanJumlah, setScanJumlah] = useState(1);
-  const [scanChannel, setScanChannel] = useState("terjual");
+  const [scanChannel, setScanChannel] = useState("event");
   const [scanShipping, setScanShipping] = useState("none");
   const [scanShipCost, setScanShipCost] = useState("");
   const [scanMarketplace, setScanMarketplace] = useState(false);
@@ -886,9 +886,12 @@ function PlaiInventory() {
   };
 
   const channelStats = () => {
-    const map = { terjual: 0, kol: 0, event: 0 };
+    const kasirChannels = Object.keys(CHANNEL_SOURCE_MAP); // event, wa, dm, web
+    const map = { kasir: 0, marketplace: 0, kol: 0 };
     transactions.filter(t => t.tipe === "keluar").forEach(t => {
-      if (map[t.channel] !== undefined) map[t.channel] += t.jumlah;
+      if (kasirChannels.includes(t.channel) || t.channel === "terjual" || t.channel === "direct") map.kasir += t.jumlah;
+      else if (["shopee","tokopedia","tiktok","consignment","b2b"].includes(t.channel)) map.marketplace += t.jumlah;
+      else if (t.channel === "kol") map.kol += t.jumlah;
     });
     return map;
   };
@@ -1057,6 +1060,13 @@ function PlaiInventory() {
   };
 
   const handleKeluar = (data) => {
+    // Pinjam Baju: delegate entirely to handlePinjam (no keluar transaction, no double stok reduction)
+    if (data.channel === "pinjam") {
+      handlePinjam(data);
+      showToast(`⇄ Peminjaman ${data.nama} x${data.jumlah} dicatat`);
+      return;
+    }
+
     const item = inventory.find(i => i.sku === data.sku);
     const newStok = Math.max(0, (item?.stok || 0) - data.jumlah);
     const txData = makeTxData(data);
@@ -1067,12 +1077,6 @@ function PlaiInventory() {
     sbUpsertInventory(data.sku, newStok);
     sbInsertTx(tx);
 
-    // Pinjam Baju: delegate to handlePinjam, no income/expense
-    if (data.channel === "pinjam") {
-      handlePinjam(data);
-      return;
-    }
-
     // KOL: auto-create marketing expense (6-60007), no income
     if (data.channel === "kol") {
       const ts = Date.now();
@@ -1081,7 +1085,7 @@ function PlaiInventory() {
         id: ts,
         date: data.tanggal || new Date().toISOString().split("T")[0],
         expense_number: `EXP-${dateStr}-${String(ts).slice(-4)}`,
-        from_account_code: "1-10002-2",
+        from_account_code: "1-10200-2",
         account_code: "6-60007",
         account_name: "KOL & PR Package",
         description: `KOL/PR: ${data.nama} x${data.jumlah}${data.catatan ? " — " + data.catatan : ""}`,
@@ -1114,7 +1118,7 @@ function PlaiInventory() {
         amount: incomeAmount,
         payment_method: "transfer",
         customer: data.customer || "",
-        pay_to_account_code: "1-10002-2",
+        pay_to_account_code: "1-10200-2",
         invoice_number: null,
         source_type: source
       };
@@ -1168,7 +1172,7 @@ function PlaiInventory() {
     setScanHistory(prev => [{ ...data, tipe: scanMode, waktu: new Date().toLocaleTimeString("id-ID"), stokBefore: currentStok, stokAfter }, ...prev].slice(0, 10));
     setScanResult(null);
     setScanJumlah(1);
-    setScanChannel("terjual");
+    setScanChannel("event");
     setScanShipping("none");
     setScanShipCost("");
     setScanMarketplace(false);
@@ -1292,7 +1296,7 @@ function PlaiInventory() {
     setKasirShipCost("");
     setKasirMarketplace(false);
     setKasirPelangganShipCost("");
-    setKasirChannel("terjual");
+    setKasirChannel("event");
   };
 
   const handleDeleteProduct = (sku) => {
@@ -1613,7 +1617,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       amount: parseRp(mktSettleAmount) || 0,
       payment_method: "transfer",
       customer: mktSettlePlatform,
-      pay_to_account_code: "1-10002-2",
+      pay_to_account_code: "1-10200-2",
       invoice_number: mktSettleRef || null,
       source_type: "marketplace"
     };
@@ -1647,7 +1651,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       amount: netRevenue,
       payment_method: "transfer",
       customer: consToko,
-      pay_to_account_code: "1-10002-2",
+      pay_to_account_code: "1-10200-2",
       invoice_number: consRef || null,
       source_type: "consignment",
       cogs: parseRp(consCogs) || 0,
@@ -1663,9 +1667,14 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
   const addExpense = () => {
     if (!expAccount || !expAmount) { showToast("Isi akun dan jumlah!", "danger"); return; }
     const acc = JURNAL_ACCOUNTS.find(a => a.code === expAccount);
+    const ts = Date.now();
+    const dateStr = expDate.replace(/-/g, "");
+    const payToAccCode = (expPayMethod === "cash" || expPayMethod === "tunai" || expPayMethod === "ewallet") ? "1-10100" : "1-10200-2";
     const exp = {
-      id: Date.now(),
+      id: ts,
       date: expDate,
+      expense_number: `EXP-${dateStr}-${String(ts).slice(-4)}`,
+      from_account_code: payToAccCode,
       account_code: expAccount,
       account_name: acc ? acc.name : expAccount,
       description: expDesc,
@@ -1682,15 +1691,22 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
 
   const addIncome = () => {
     if (!incAmount) { showToast("Isi jumlah!", "danger"); return; }
+    const ts = Date.now();
+    const dateStr = incDate.replace(/-/g, "");
+    const chLower = (incChannel || "").toLowerCase();
     const inc = {
-      id: Date.now(),
+      id: ts,
       date: incDate,
+      income_number: `INC-${dateStr}-${String(ts).slice(-4)}`,
       source: incSource,
+      revenue_account_code: "4-40000",
+      tags: CHANNEL_TAGS[chLower] || incChannel || "",
       channel: incChannel,
       description: incDesc,
       amount: parseRp(incAmount) || 0,
       payment_method: incPayMethod,
       customer: incCustomer,
+      pay_to_account_code: (incPayMethod === "cash" || incPayMethod === "tunai") ? "1-10100" : "1-10200-2",
       created_at: new Date().toISOString(),
     };
     setIncomes(prev => [inc, ...prev]);
@@ -1729,204 +1745,180 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     return items;
   };
 
-  const exportKeuanganExcel = () => {
-    const wb = XLSX.utils.book_new();
+  // ── Shared export data builder (called by all individual export fns) ──
+  const buildExportData = () => {
     const filteredExp = filterByPeriod(expenses, keuanganPeriod);
-    // Exclude auto-income kasir (b2c_direct/event) dari filteredInc — kasirRevenue sudah cover dari transactions
     const filteredInc = filterByPeriod(
       incomes.filter(i => !["b2c_direct", "event"].includes(i.source_type)),
       keuanganPeriod
     );
-
-    // Helper: format payment method for Jurnal.id
-    const fmtPayMethod = (m) => {
-      if (!m) return "Transfer";
-      if (m === "cash" || m === "tunai") return "Cash";
-      if (m === "ewallet" || m === "gopay" || m === "ovo" || m === "dana") return "Cash";
-      return "Transfer";
-    };
-    // Helper: from account code
-    const fromAccCode = (m) => (m === "cash" || m === "tunai" || m === "ewallet") ? "1-10001" : "1-10002-2";
-    // Helper: generate expense number from existing or fallback
-    const expNum = (e) => e.expense_number || `EXP-${(e.date || "").replace(/-/g, "").substring(0, 8)}-${String(e.id || "").slice(-4)}`;
-    // Helper: generate income number
-    const incNum = (i) => i.income_number || `INC-${(i.date || "").replace(/-/g, "").substring(0, 8)}-${String(i.id || "").slice(-4)}`;
-    // Helper: format date DD/MM/YYYY for Jurnal.id
-    const fmtDate = (d) => {
-      if (!d) return "";
-      const parts = d.split("-");
-      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
-      return d;
-    };
-    // Helper: map source to revenue account code (Jurnal.id COA)
-    // All channels unified to 4-40000 Revenue Product; channel differentiation via Tags
-    const revenueAccCode = () => "4-40000";
-    // Helper: get Jurnal.id tag for income record
-    const revenueTag = (i) => {
-      if (i.tags) return i.tags;
-      const ch = (i.channel || "").toLowerCase();
-      return CHANNEL_TAGS[ch] || ch || "";
-    };
-
-    // ── SHEET 1: Expense Import (Jurnal.id format) ──
-    const expImportRows = [
-      ["*FromAccountNumber", "Beneficiery", "Address", "*ExpenseDate", "*ExpenseNumber", "*PaymentMethod", "*ExpenseAccount", "Description", "TaxName", "TaxRate", "*Amount", "#PayLater?(yes/no)", "#DueDate", "Tags"],
-      ...filteredExp.map(e => [
-        fromAccCode(e.payment_method),
-        e.recipient || "",
-        "",
-        fmtDate(e.date),
-        expNum(e),
-        fmtPayMethod(e.payment_method),
-        e.account_code || "",
-        e.description || "",
-        "",
-        "",
-        e.amount || 0,
-        "no",
-        "",
-        ""
-      ])
-    ];
-    const ws1 = XLSX.utils.aoa_to_sheet(expImportRows);
-    ws1["!cols"] = [{ wch: 20 }, { wch: 25 }, { wch: 10 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 40 }, { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 10 }];
-    XLSX.utils.book_append_sheet(wb, ws1, "Expense Import");
-
-    // ── SHEET 2: Receive Payment Import (Jurnal.id format) ──
-    // Only for marketplace & b2c_direct incomes
-    const rpIncomes = filteredInc.filter(i => i.source === "marketplace" || i.source === "b2c_direct" || i.source === "other" || !i.source);
-    const rpRows = [
-      ["*Payment Date", "*Payment Number", "*Invoice Number", "*Pay to account (Code)", "*Amount", "*PaymentMethod", "WitholdingAccountCode", "WitholdingAmount(value or %)", "Tags(use ; to separate tags)"],
-      ...rpIncomes.map(i => [
-        fmtDate(i.date),
-        incNum(i),
-        i.invoice_number || "",
-        i.pay_to_account_code || fromAccCode(i.payment_method),
-        i.amount || 0,
-        fmtPayMethod(i.payment_method),
-        "",
-        "",
-        revenueTag(i)
-      ])
-    ];
-    const ws2 = XLSX.utils.aoa_to_sheet(rpRows);
-    ws2["!cols"] = [{ wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 24 }, { wch: 20 }];
-    XLSX.utils.book_append_sheet(wb, ws2, "Receive Payment Import");
-
-    // ── SHEET 3: Raw Expenses (internal reference) ──
-    const expRows = [
-      ["Tanggal", "No. Expense", "From Account", "Kode Akun", "Nama Akun", "Deskripsi", "Jumlah", "Metode Bayar", "Penerima"],
-      ...filteredExp.map(e => [e.date, expNum(e), fromAccCode(e.payment_method), e.account_code, e.account_name, e.description, e.amount, e.payment_method, e.recipient])
-    ];
-    const ws3 = XLSX.utils.aoa_to_sheet(expRows);
-    ws3["!cols"] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 28 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }];
-    XLSX.utils.book_append_sheet(wb, ws3, "Expenses");
-
-    // ── SHEET 4: Raw Incomes (internal reference) ──
-    const incRows = [
-      ["Tanggal", "No. Income", "Sumber", "Channel", "Revenue Account", "Tags", "Deskripsi", "Jumlah", "Metode Bayar", "Customer", "Pay To Account"],
-      ...filteredInc.map(i => [i.date, incNum(i), i.source, i.channel, revenueAccCode(), revenueTag(i), i.description, i.amount, i.payment_method, i.customer, i.pay_to_account_code || fromAccCode(i.payment_method)])
-    ];
-    const ws4 = XLSX.utils.aoa_to_sheet(incRows);
-    ws4["!cols"] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 22 }, { wch: 35 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 16 }];
-    XLSX.utils.book_append_sheet(wb, ws4, "Incomes");
-
-    const totalExpByAccount = {};
-    filteredExp.forEach(e => {
-      if (!totalExpByAccount[e.account_code]) totalExpByAccount[e.account_code] = { name: e.account_name, total: 0 };
-      totalExpByAccount[e.account_code].total += e.amount;
-    });
-    const totalIncBySrc = {};
-    filteredInc.forEach(i => {
-      const key = i.source + (i.channel ? " - " + i.channel : "");
-      if (!totalIncBySrc[key]) totalIncBySrc[key] = 0;
-      totalIncBySrc[key] += i.amount;
-    });
-    // kasirRevenue: semua channel kasir langsung dari transactions (terjual/wa/dm/web/event)
-    // filteredInc sudah exclude auto-income kasir (b2c_direct/event) — hindari double-count
+    const isCash = (m) => ["cash","tunai","ewallet","gopay","ovo","dana","shopeepay"].includes((m||"").toLowerCase());
+    const fmtPayMethod = (m) => isCash(m) ? "Cash" : "Transfer";
+    const fromAccCode = (m) => isCash(m) ? "1-10100" : "1-10200-2";
+    const expNum = (e) => e.expense_number || `EXP-${(e.date||"").replace(/-/g,"").substring(0,8)}-${String(e.id||"").slice(-4)}`;
+    const incNum = (i) => i.income_number || `INC-${(i.date||"").replace(/-/g,"").substring(0,8)}-${String(i.id||"").slice(-4)}`;
+    const fmtDate = (d) => { if (!d) return ""; const p = d.split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : d; };
+    const revenueTag = (i) => { if (i.tags) return i.tags; const ch=(i.channel||"").toLowerCase(); return CHANNEL_TAGS[ch]||ch||""; };
+    const kasirChs = [...Object.keys(CHANNEL_SOURCE_MAP), "terjual", "direct"];
     const kasirRevenue = filterByPeriod(
-      transactions.filter(t => t.tipe === "keluar" && Object.keys(CHANNEL_SOURCE_MAP).includes(t.channel)),
-      keuanganPeriod
+      transactions.filter(t => t.tipe === "keluar" && kasirChs.includes(t.channel)), keuanganPeriod
     ).reduce((sum, t) => sum + (t.jumlah * t.harga), 0);
-
-    const plRows = [
-      ["Plai Sports Club"],
-      ["Profit & Loss (Simplified)"],
-      [],
-      ["PENDAPATAN (REVENUE)"],
-      ["Penjualan (Kasir)", kasirRevenue],
-      ...Object.entries(totalIncBySrc).map(([k, v]) => [k, v]),
-      ["Total Pendapatan", kasirRevenue + filteredInc.reduce((s, i) => s + i.amount, 0)],
-      [],
-      ["PENGELUARAN (EXPENSES)"],
-      ...Object.entries(totalExpByAccount).sort((a, b) => a[0].localeCompare(b[0])).map(([code, d]) => [`${code} ${d.name}`, d.total]),
-      ["Total Pengeluaran", filteredExp.reduce((s, e) => s + e.amount, 0)],
-      [],
-      ["LABA / (RUGI)", (kasirRevenue + filteredInc.reduce((s, i) => s + i.amount, 0)) - filteredExp.reduce((s, e) => s + e.amount, 0)],
-    ];
-    const ws5 = XLSX.utils.aoa_to_sheet(plRows);
-    ws5["!cols"] = [{ wch: 35 }, { wch: 18 }];
-    XLSX.utils.book_append_sheet(wb, ws5, "P&L");
-
-    const dateStr = new Date().toISOString().split("T")[0];
-    const periodLabel = keuanganPeriod === "semua" ? "AllPeriod" : keuanganPeriod;
-    XLSX.writeFile(wb, `Plai_JurnalID_${periodLabel}_${dateStr}.xlsx`);
-    showToast("✓ Excel exported!");
+    const totalExpByAccount = {};
+    filteredExp.forEach(e => { if (!totalExpByAccount[e.account_code]) totalExpByAccount[e.account_code]={name:e.account_name,total:0}; totalExpByAccount[e.account_code].total+=e.amount; });
+    const totalIncBySrc = {};
+    filteredInc.forEach(i => { const k=i.source+(i.channel?" - "+i.channel:""); if (!totalIncBySrc[k]) totalIncBySrc[k]=0; totalIncBySrc[k]+=i.amount; });
+    const cogsAccounts = Object.entries(totalExpByAccount).filter(([c])=>c.startsWith("5-")).sort((a,b)=>a[0].localeCompare(b[0]));
+    const opexAccounts = Object.entries(totalExpByAccount).filter(([c])=>c.startsWith("6-")).sort((a,b)=>a[0].localeCompare(b[0]));
+    const otherAccounts = Object.entries(totalExpByAccount).filter(([c])=>c.startsWith("8-")).sort((a,b)=>a[0].localeCompare(b[0]));
+    const cogsTotal = cogsAccounts.reduce((s,[,d])=>s+d.total,0);
+    const opexTotal = opexAccounts.reduce((s,[,d])=>s+d.total,0);
+    const otherTotal = otherAccounts.reduce((s,[,d])=>s+d.total,0);
+    const totalIncome = kasirRevenue + filteredInc.reduce((s,i)=>s+i.amount,0);
+    return { filteredExp, filteredInc, fmtPayMethod, fromAccCode, expNum, incNum, fmtDate, revenueTag,
+             kasirRevenue, totalExpByAccount, totalIncBySrc, cogsAccounts, opexAccounts, otherAccounts,
+             cogsTotal, opexTotal, otherTotal, totalIncome };
   };
 
-  // Export Expense as CSV (Jurnal.id direct import format)
+  const getPeriodLabel = () => keuanganPeriod === "semua" ? "AllPeriod" : keuanganPeriod;
+  const getDateStr = () => new Date().toISOString().split("T")[0];
+
+  // ── Export 1: Expense Import CSV → upload ke Jurnal.id ──
   const exportExpenseCSV = () => {
-    const filteredExp = filterByPeriod(expenses, keuanganPeriod);
-    const fmtPayMethod = (m) => {
-      if (!m) return "Transfer";
-      if (m === "cash" || m === "tunai") return "Cash";
-      if (m === "ewallet" || m === "gopay" || m === "ovo" || m === "dana") return "Cash";
-      return "Transfer";
-    };
-    const fromAccCode = (m) => (m === "cash" || m === "tunai" || m === "ewallet") ? "1-10001" : "1-10002-2";
-    const expNum = (e) => e.expense_number || `EXP-${(e.date || "").replace(/-/g, "").substring(0, 8)}-${String(e.id || "").slice(-4)}`;
-    const fmtDate = (d) => {
-      if (!d) return "";
-      const parts = d.split("-");
-      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
-      return d;
-    };
+    const { filteredExp, fmtPayMethod, fromAccCode, expNum, fmtDate } = buildExportData();
+    const header = ["*FromAccountNumber","Beneficiery","Address","*ExpenseDate","*ExpenseNumber","*PaymentMethod","*ExpenseAccount","Description","TaxName","TaxRate","*Amount","#PayLater?(yes/no)","#DueDate","Tags"];
+    const rows = filteredExp.map(e => [fromAccCode(e.payment_method),e.recipient||"","",fmtDate(e.date),expNum(e),fmtPayMethod(e.payment_method),e.account_code||"",e.description||"","","",e.amount||0,"no","",e.tags||""]);
+    const csv = [header,...rows].map(r=>r.map(c=>{const v=String(c??"");return v.includes(",")||v.includes('"')||v.includes("\n")?`"${v.replace(/"/g,'""')}"`:`${v}`;}).join(",")).join("\n");
+    const blob = new Blob([csv],{type:"text/csv;charset=utf-8;"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`Plai_ExpenseImport_${getPeriodLabel()}_${getDateStr()}.csv`; a.click();
+    showToast(`✓ Expense CSV (${rows.length} rows) — siap upload ke Jurnal.id`);
+  };
 
-    const header = ["*FromAccountNumber", "Beneficiery", "Address", "*ExpenseDate", "*ExpenseNumber", "*PaymentMethod", "*ExpenseAccount", "Description", "TaxName", "TaxRate", "*Amount", "#PayLater?(yes/no)", "#DueDate", "Tags"];
-    const rows = filteredExp.map(e => [
-      fromAccCode(e.payment_method),
-      e.recipient || "",
-      "",
-      fmtDate(e.date),
-      expNum(e),
-      fmtPayMethod(e.payment_method),
-      e.account_code || "",
-      e.description || "",
-      "",
-      "",
-      e.amount || 0,
-      "no",
-      "",
-      ""
+  // ── Export 2: Receive Payment Excel → upload ke Jurnal.id ──
+  const exportReceivePaymentExcel = () => {
+    const { filteredInc, fmtPayMethod, fromAccCode, incNum, fmtDate, revenueTag } = buildExportData();
+    const rpIncomes = filteredInc.filter(i=>["marketplace","b2c_direct","consignment","b2b","other"].includes(i.source)||!i.source);
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["*Payment Date","*Payment Number","*Invoice Number","*Pay to account (Code)","*Amount","*PaymentMethod","WitholdingAccountCode","WitholdingAmount(value or %)","Tags(use ; to separate tags)"],
+      ...rpIncomes.map(i=>[fmtDate(i.date),incNum(i),i.invoice_number||"",i.pay_to_account_code||fromAccCode(i.payment_method),i.amount||0,fmtPayMethod(i.payment_method),"","",revenueTag(i)])
     ]);
+    ws["!cols"]=[{wch:14},{wch:22},{wch:18},{wch:22},{wch:14},{wch:14},{wch:22},{wch:24},{wch:20}];
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Receive Payment Import");
+    XLSX.writeFile(wb,`Plai_ReceivePayment_${getPeriodLabel()}_${getDateStr()}.xlsx`);
+    showToast(`✓ Receive Payment Excel (${rpIncomes.length} rows) — siap upload ke Jurnal.id`);
+  };
 
-    const csvContent = [header, ...rows].map(row =>
-      row.map(cell => {
-        const val = String(cell ?? "");
-        return val.includes(",") || val.includes('"') || val.includes("\n") ? `"${val.replace(/"/g, '""')}"` : val;
-      }).join(",")
-    ).join("\n");
+  // ── Export 3: Raw Expenses Excel (referensi internal) ──
+  const exportExpensesRawExcel = () => {
+    const { filteredExp, fromAccCode, expNum } = buildExportData();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Tanggal","No. Expense","From Account","Kode Akun","Nama Akun","Deskripsi","Jumlah","Metode Bayar","Penerima","Tags"],
+      ...filteredExp.map(e=>[e.date,expNum(e),fromAccCode(e.payment_method),e.account_code,e.account_name,e.description,e.amount,e.payment_method,e.recipient,e.tags||""])
+    ]);
+    ws["!cols"]=[{wch:12},{wch:22},{wch:14},{wch:12},{wch:28},{wch:35},{wch:14},{wch:12},{wch:20},{wch:14}];
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Expenses");
+    XLSX.writeFile(wb,`Plai_Expenses_${getPeriodLabel()}_${getDateStr()}.xlsx`);
+    showToast(`✓ Expenses Excel (${filteredExp.length} rows)`);
+  };
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const dateStr = new Date().toISOString().split("T")[0];
-    const periodLabel = keuanganPeriod === "semua" ? "AllPeriod" : keuanganPeriod;
-    a.href = url;
-    a.download = `Plai_Expense_JurnalID_${periodLabel}_${dateStr}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast(`✓ CSV exported! (${rows.length} expenses)`);
+  // ── Export 4: Raw Incomes Excel (referensi internal) ──
+  const exportIncomesRawExcel = () => {
+    const { filteredInc, fromAccCode, incNum, revenueTag } = buildExportData();
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Tanggal","No. Income","Sumber","Channel","Revenue Account","Tags","Deskripsi","Jumlah","Metode Bayar","Customer","Pay To Account"],
+      ...filteredInc.map(i=>[i.date,incNum(i),i.source,i.channel,"4-40000",revenueTag(i),i.description,i.amount,i.payment_method,i.customer,i.pay_to_account_code||fromAccCode(i.payment_method)])
+    ]);
+    ws["!cols"]=[{wch:12},{wch:22},{wch:14},{wch:14},{wch:16},{wch:22},{wch:35},{wch:14},{wch:12},{wch:20},{wch:16}];
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Incomes");
+    XLSX.writeFile(wb,`Plai_Incomes_${getPeriodLabel()}_${getDateStr()}.xlsx`);
+    showToast(`✓ Incomes Excel (${filteredInc.length} rows)`);
+  };
+
+  // ── Export 5: P&L Excel ──
+  const exportPLExcel = () => {
+    const { kasirRevenue, totalIncBySrc, cogsAccounts, opexAccounts, otherAccounts, cogsTotal, opexTotal, otherTotal, totalIncome } = buildExportData();
+    const plRows = [
+      ["Plai Sports Club"],["Profit & Loss"],[],
+      ["PENDAPATAN (REVENUE)"],
+      ["Penjualan Kasir (B2C Direct)", kasirRevenue],
+      ...Object.entries(totalIncBySrc).map(([k,v])=>[k,v]),
+      ["Total Pendapatan", totalIncome],[],
+      ["HARGA POKOK PENJUALAN (COGS)"],
+      ...cogsAccounts.map(([code,d])=>[`  ${code} ${d.name}`,d.total]),
+      ["Total HPP", cogsTotal],[],
+      ["LABA KOTOR (GROSS PROFIT)", totalIncome-cogsTotal],[],
+      ["BEBAN OPERASIONAL (OPEX)"],
+      ...opexAccounts.map(([code,d])=>[`  ${code} ${d.name}`,d.total]),
+      ["Total Beban Operasional", opexTotal],[],
+      ["LABA OPERASIONAL", totalIncome-cogsTotal-opexTotal],[],
+      ...(otherAccounts.length>0?[["BEBAN LAINNYA"],...otherAccounts.map(([code,d])=>[`  ${code} ${d.name}`,d.total]),["Total Beban Lainnya",otherTotal],[]]:[]),
+      ["LABA / (RUGI) BERSIH", totalIncome-cogsTotal-opexTotal-otherTotal],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(plRows); ws["!cols"]=[{wch:35},{wch:18}];
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"P&L");
+    XLSX.writeFile(wb,`Plai_PL_${getPeriodLabel()}_${getDateStr()}.xlsx`);
+    showToast("✓ P&L Excel exported!");
+  };
+
+  // ── Export Semua: all 5 sheets in one Excel ──
+  const exportKeuanganExcel = () => {
+    const { filteredExp, filteredInc, fmtPayMethod, fromAccCode, expNum, incNum, fmtDate, revenueTag,
+            kasirRevenue, totalIncBySrc, cogsAccounts, opexAccounts, otherAccounts,
+            cogsTotal, opexTotal, otherTotal, totalIncome } = buildExportData();
+    const wb = XLSX.utils.book_new();
+    // Sheet 1: Expense Import
+    const ws1 = XLSX.utils.aoa_to_sheet([["*FromAccountNumber","Beneficiery","Address","*ExpenseDate","*ExpenseNumber","*PaymentMethod","*ExpenseAccount","Description","TaxName","TaxRate","*Amount","#PayLater?(yes/no)","#DueDate","Tags"],...filteredExp.map(e=>[fromAccCode(e.payment_method),e.recipient||"","",fmtDate(e.date),expNum(e),fmtPayMethod(e.payment_method),e.account_code||"",e.description||"","","",e.amount||0,"no","",e.tags||""])]);
+    ws1["!cols"]=[{wch:20},{wch:25},{wch:10},{wch:14},{wch:22},{wch:14},{wch:16},{wch:40},{wch:10},{wch:8},{wch:14},{wch:16},{wch:12},{wch:10}];
+    XLSX.utils.book_append_sheet(wb,ws1,"Expense Import");
+    // Sheet 2: Receive Payment Import
+    const rpIncomes=filteredInc.filter(i=>["marketplace","b2c_direct","consignment","b2b","other"].includes(i.source)||!i.source);
+    const ws2=XLSX.utils.aoa_to_sheet([["*Payment Date","*Payment Number","*Invoice Number","*Pay to account (Code)","*Amount","*PaymentMethod","WitholdingAccountCode","WitholdingAmount(value or %)","Tags(use ; to separate tags)"],...rpIncomes.map(i=>[fmtDate(i.date),incNum(i),i.invoice_number||"",i.pay_to_account_code||fromAccCode(i.payment_method),i.amount||0,fmtPayMethod(i.payment_method),"","",revenueTag(i)])]);
+    ws2["!cols"]=[{wch:14},{wch:22},{wch:18},{wch:22},{wch:14},{wch:14},{wch:22},{wch:24},{wch:20}];
+    XLSX.utils.book_append_sheet(wb,ws2,"Receive Payment Import");
+    // Sheet 3: Raw Expenses
+    const ws3=XLSX.utils.aoa_to_sheet([["Tanggal","No. Expense","From Account","Kode Akun","Nama Akun","Deskripsi","Jumlah","Metode Bayar","Penerima","Tags"],...filteredExp.map(e=>[e.date,expNum(e),fromAccCode(e.payment_method),e.account_code,e.account_name,e.description,e.amount,e.payment_method,e.recipient,e.tags||""])]);
+    ws3["!cols"]=[{wch:12},{wch:22},{wch:14},{wch:12},{wch:28},{wch:35},{wch:14},{wch:12},{wch:20},{wch:14}];
+    XLSX.utils.book_append_sheet(wb,ws3,"Expenses");
+    // Sheet 4: Raw Incomes
+    const ws4=XLSX.utils.aoa_to_sheet([["Tanggal","No. Income","Sumber","Channel","Revenue Account","Tags","Deskripsi","Jumlah","Metode Bayar","Customer","Pay To Account"],...filteredInc.map(i=>[i.date,incNum(i),i.source,i.channel,"4-40000",revenueTag(i),i.description,i.amount,i.payment_method,i.customer,i.pay_to_account_code||fromAccCode(i.payment_method)])]);
+    ws4["!cols"]=[{wch:12},{wch:22},{wch:14},{wch:14},{wch:16},{wch:22},{wch:35},{wch:14},{wch:12},{wch:20},{wch:16}];
+    XLSX.utils.book_append_sheet(wb,ws4,"Incomes");
+    // Sheet 5: P&L
+    const plRows=[["Plai Sports Club"],["Profit & Loss"],[],["PENDAPATAN (REVENUE)"],["Penjualan Kasir (B2C Direct)",kasirRevenue],...Object.entries(totalIncBySrc).map(([k,v])=>[k,v]),["Total Pendapatan",totalIncome],[],["HARGA POKOK PENJUALAN (COGS)"],...cogsAccounts.map(([code,d])=>[`  ${code} ${d.name}`,d.total]),["Total HPP",cogsTotal],[],["LABA KOTOR (GROSS PROFIT)",totalIncome-cogsTotal],[],["BEBAN OPERASIONAL (OPEX)"],...opexAccounts.map(([code,d])=>[`  ${code} ${d.name}`,d.total]),["Total Beban Operasional",opexTotal],[],["LABA OPERASIONAL",totalIncome-cogsTotal-opexTotal],[],  ...(otherAccounts.length>0?[["BEBAN LAINNYA"],...otherAccounts.map(([code,d])=>[`  ${code} ${d.name}`,d.total]),["Total Beban Lainnya",otherTotal],[]]:[]),["LABA / (RUGI) BERSIH",totalIncome-cogsTotal-opexTotal-otherTotal]];
+    const ws5=XLSX.utils.aoa_to_sheet(plRows); ws5["!cols"]=[{wch:35},{wch:18}];
+    XLSX.utils.book_append_sheet(wb,ws5,"P&L");
+    XLSX.writeFile(wb,`Plai_JurnalID_${getPeriodLabel()}_${getDateStr()}.xlsx`);
+    showToast("✓ Full Excel (5 sheets) exported!");
+  };
+
+  // Backfill income records: set revenue_account_code=4-40000 + tags from CHANNEL_TAGS
+  const runBackfillCOA = async () => {
+    if (!sbClient) { showToast("❌ Sambungkan Supabase dulu!", "danger"); return; }
+    showToast("⏳ Menjalankan backfill...");
+    let errors = [];
+
+    // Step 1: set revenue_account_code = '4-40000' for all incomes that are null or different
+    const { error: e1 } = await sbClient.from('incomes')
+      .update({ revenue_account_code: '4-40000' })
+      .or('revenue_account_code.is.null,revenue_account_code.neq.4-40000');
+    if (e1) errors.push("COA update: " + e1.message);
+
+    // Step 2: backfill tags per channel (only where tags is null)
+    for (const [ch, tag] of Object.entries(CHANNEL_TAGS)) {
+      const { error: e2 } = await sbClient.from('incomes')
+        .update({ tags: tag })
+        .eq('channel', ch)
+        .is('tags', null);
+      if (e2) errors.push(`Tags ${ch}: ${e2.message}`);
+    }
+
+    if (errors.length > 0) {
+      showToast("⚠️ Backfill selesai dengan error: " + errors.join("; "), "danger");
+    } else {
+      // Reload incomes from Supabase to reflect updates
+      const { data } = await sbClient.from('incomes').select('*').order('date', { ascending: false });
+      if (data) setIncomes(data);
+      showToast("✅ Backfill selesai! Semua income → COA 4-40000 + Tags diisi.");
+    }
   };
 
   // ── PAGES ────────────────────────────────────────────────────────────────────
@@ -2065,7 +2057,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                 <div style={{ marginBottom: 14 }}>
                   <label style={{ ...s.label, marginBottom: 6 }}>Channel</label>
                   <div style={{ display: "flex", gap: 8 }}>
-                    {[["terjual", "🛒 Terjual"], ["kol", "📱 KOL"], ["event", "🎪 Event"]].map(([v, lbl]) => (
+                    {[["event","🛍️ Walk in/Event"], ["wa","💬 WA"], ["dm","📸 DM"], ["web","🌐 Web"], ["kol","📱 KOL"], ["pinjam","👗 Pinjam"]].map(([v, lbl]) => (
                       <button key={v} onClick={() => setScanChannel(v)}
                         style={{ ...s.btn(scanChannel === v ? "primary" : "secondary"), flex: 1, fontSize: 12 }}>{lbl}</button>
                     ))}
@@ -2205,13 +2197,13 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
               </div>
               <div style={s.card}>
                 <div style={s.cardTitle}>📊 Channel Distribusi</div>
-                {[["🛒 Terjual", ch.terjual, COLORS.aqua], ["📱 KOL", ch.kol, COLORS.warning], ["🎪 Event", ch.event, COLORS.success]].map(([lbl, val, color]) => (
+                {[["🛒 Kasir (B2C)", ch.kasir, COLORS.aqua], ["🏪 Marketplace/B2B", ch.marketplace, COLORS.success], ["📱 KOL", ch.kol, COLORS.warning]].map(([lbl, val, color]) => (
                   <div key={lbl} style={{ marginBottom: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                       <span>{lbl}</span><span style={{ color, fontWeight: 700 }}>{val} unit</span>
                     </div>
                     <div style={s.progressBar()}>
-                      <div style={s.progressFill(val / Math.max(1, ch.terjual + ch.kol + ch.event) * 100, color)} />
+                      <div style={s.progressFill(val / Math.max(1, ch.kasir + ch.marketplace + ch.kol) * 100, color)} />
                     </div>
                   </div>
                 ))}
@@ -2786,8 +2778,35 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       const totalRusak = filteredTx.filter(t => t.tipe === "rusak").reduce((a, t) => a + t.jumlah, 0);
       const totalRevenueBruto = filteredTx.filter(t => t.tipe === "keluar").reduce((a, t) => a + (t.harga || 0) * t.jumlah, 0);
       const totalDiskon = filteredTx.filter(t => t.tipe === "keluar").reduce((a, t) => a + (t.diskon || 0), 0);
-      const totalRevenue = totalRevenueBruto - totalDiskon;
-      const chFiltered = Object.fromEntries(["terjual","direct","shopee","tokopedia","tiktok","event","consignment","b2b","kol"].map(ch => [ch, filteredTx.filter(t => t.tipe === "keluar" && t.channel === ch).reduce((a, t) => a + t.jumlah, 0)]));
+      // Sync with Keuangan: kasirRev from transactions + non-kasir incomes from incomes table
+      const allKeluar = filteredTx.filter(t => t.tipe === "keluar");
+      const kasirChs = [...Object.keys(CHANNEL_SOURCE_MAP), "terjual", "direct"];
+      const kasirRevLaporan = filterByPeriod(
+        transactions.filter(t => t.tipe === "keluar" && kasirChs.includes(t.channel)),
+        laporanPeriod
+      ).reduce((sum, t) => sum + (t.jumlah * t.harga), 0);
+      const nonKasirIncLaporan = filterByPeriod(
+        incomes.filter(i => !["b2c_direct", "event"].includes(i.source_type)),
+        laporanPeriod
+      ).reduce((s, i) => s + i.amount, 0);
+      const totalRevenue = kasirRevLaporan + nonKasirIncLaporan - totalDiskon;
+      // Expense totals synced with Keuangan
+      const laporanExpenses = filterByPeriod(expenses, laporanPeriod);
+      const laporanCogsTotal = laporanExpenses.filter(e => (e.account_code || "").startsWith("5-")).reduce((s, e) => s + e.amount, 0);
+      const laporanOpexTotal = laporanExpenses.filter(e => (e.account_code || "").startsWith("6-")).reduce((s, e) => s + e.amount, 0);
+      const laporanOtherExpTotal = laporanExpenses.filter(e => (e.account_code || "").startsWith("8-")).reduce((s, e) => s + e.amount, 0);
+      const laporanTotalExp = laporanExpenses.reduce((s, e) => s + e.amount, 0);
+      const laporanGrossProfit = totalRevenue - laporanCogsTotal;
+      const laporanOperatingProfit = laporanGrossProfit - laporanOpexTotal;
+      const laporanNetProfit = laporanOperatingProfit - laporanOtherExpTotal;
+      const chFiltered = {
+        kasir: allKeluar.filter(t => kasirChs.includes(t.channel)).reduce((a, t) => a + t.jumlah, 0),
+        shopee: allKeluar.filter(t => t.channel === "shopee").reduce((a, t) => a + t.jumlah, 0),
+        tokopedia: allKeluar.filter(t => ["tokopedia","tiktok"].includes(t.channel)).reduce((a, t) => a + t.jumlah, 0),
+        consignment: allKeluar.filter(t => t.channel === "consignment").reduce((a, t) => a + t.jumlah, 0),
+        b2b: allKeluar.filter(t => t.channel === "b2b").reduce((a, t) => a + t.jumlah, 0),
+        kol: allKeluar.filter(t => t.channel === "kol").reduce((a, t) => a + t.jumlah, 0),
+      };
       const shippingExpense = filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "plai").reduce((a, t) => a + (t.shippingCost || 0), 0);
       const shippingExpenseList = filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "plai");
       const pelangganShipRevenue = filteredTx.filter(t => t.tipe === "keluar" && t.shipping === "pelanggan").reduce((a, t) => a + (t.pelangganShipCost || 0), 0);
@@ -2886,16 +2905,29 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
           { Keterangan: "Total Masuk (unit)", Nilai: totalMasuk },
           { Keterangan: "Total Keluar (unit)", Nilai: totalKeluar },
           { Keterangan: "Rusak/Hilang (unit)", Nilai: totalRusak },
-          { Keterangan: "Revenue Bruto (Sebelum Diskon)", Nilai: totalRevenueBruto },
+          { Keterangan: "Kasir Revenue", Nilai: kasirRevLaporan },
+          { Keterangan: "Non-Kasir Income", Nilai: nonKasirIncLaporan },
           { Keterangan: "Total Diskon", Nilai: totalDiskon },
-          { Keterangan: "Revenue (Setelah Diskon)", Nilai: totalRevenue },
+          { Keterangan: "Total Revenue", Nilai: totalRevenue },
+          { Keterangan: "", Nilai: "" },
+          { Keterangan: "COGS (5-xxxxx)", Nilai: laporanCogsTotal },
+          { Keterangan: "OpEx (6-xxxxx)", Nilai: laporanOpexTotal },
+          { Keterangan: "Other Expense (8-xxxxx)", Nilai: laporanOtherExpTotal },
+          { Keterangan: "Total Expense", Nilai: laporanTotalExp },
+          { Keterangan: "", Nilai: "" },
+          { Keterangan: "Gross Profit", Nilai: laporanGrossProfit },
+          { Keterangan: "Operating Profit", Nilai: laporanOperatingProfit },
+          { Keterangan: "Net Profit", Nilai: laporanNetProfit },
+          { Keterangan: "", Nilai: "" },
           { Keterangan: "Shipping Expense (Plai)", Nilai: shippingExpense },
           { Keterangan: "Shipping Income (Pelanggan)", Nilai: pelangganShipRevenue },
-          { Keterangan: "Nett Revenue", Nilai: totalRevenue - shippingExpense },
           { Keterangan: "", Nilai: "" },
-          { Keterangan: "Channel: Terjual", Nilai: chFiltered.terjual },
+          { Keterangan: "Channel: Kasir (B2C)", Nilai: chFiltered.kasir },
+          { Keterangan: "Channel: Shopee", Nilai: chFiltered.shopee },
+          { Keterangan: "Channel: Tokped/Tiktok", Nilai: chFiltered.tokopedia },
+          { Keterangan: "Channel: Consignment", Nilai: chFiltered.consignment },
+          { Keterangan: "Channel: B2B", Nilai: chFiltered.b2b },
           { Keterangan: "Channel: KOL", Nilai: chFiltered.kol },
-          { Keterangan: "Channel: Event", Nilai: chFiltered.event },
           { Keterangan: "Dari Marketplace", Nilai: marketplaceCount },
         ];
         const ws2 = window.XLSX.utils.json_to_sheet(summary);
@@ -2951,7 +2983,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
           </div>
 
           <div style={s.grid4}>
-            {[["Total Masuk", totalMasuk, COLORS.success, "unit restock"], ["Total Keluar", totalKeluar, COLORS.danger, "unit keluar"], ["Rusak/Hilang", totalRusak, COLORS.warning, "unit"], ["Revenue", `Rp ${totalRevenue.toLocaleString("id-ID")}`, COLORS.aqua, `${filteredTx.filter(t=>t.tipe==="keluar").length} transaksi`]].map(([lbl, val, color, sub]) => (
+            {[["Total Masuk", totalMasuk, COLORS.success, "unit restock"], ["Total Keluar", totalKeluar, COLORS.danger, "unit keluar"], ["Net Profit", `Rp ${laporanNetProfit.toLocaleString("id-ID")}`, laporanNetProfit >= 0 ? COLORS.success : COLORS.danger, `Revenue ${totalRevenue.toLocaleString("id-ID")}`], ["Revenue", `Rp ${totalRevenue.toLocaleString("id-ID")}`, COLORS.aqua, `Kasir ${kasirRevLaporan.toLocaleString("id-ID")} + Non-kasir ${nonKasirIncLaporan.toLocaleString("id-ID")}`]].map(([lbl, val, color, sub]) => (
               <div key={lbl} style={s.card}>
                 <div style={s.cardTitle}>{lbl}</div>
                 <div style={{ fontSize: lbl === "Revenue" ? 18 : 32, fontWeight: 800, color, marginBottom: 4 }}>{val}</div>
@@ -2965,7 +2997,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
           <div style={{ ...s.grid2, marginTop: 16 }}>
             <div style={s.card}>
               <div style={s.cardTitle}>Breakdown Channel Keluar</div>
-              {[["🛒 Terjual", chFiltered.terjual], ["📱 Marketing KOL", chFiltered.kol], ["🎪 Stock Event", chFiltered.event]].map(([lbl, val]) => (
+              {[["🛒 Kasir (B2C)", chFiltered.kasir], ["🟠 Shopee", chFiltered.shopee], ["🟢 Tokped/Tiktok", chFiltered.tokopedia], ["🏪 Consignment", chFiltered.consignment], ["🏢 B2B", chFiltered.b2b], ["📱 KOL", chFiltered.kol]].map(([lbl, val]) => (
                 <div key={lbl} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${COLORS.brownLight}20`, fontSize: 13 }}>
                   <span>{lbl}</span><span style={{ fontWeight: 700, color: COLORS.aqua }}>{val} unit ({totalKeluar > 0 ? Math.round(val / totalKeluar * 100) : 0}%)</span>
                 </div>
@@ -3109,8 +3141,8 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                     <div style={s.formGroup}>
                       <label style={s.label}>Channel</label>
                       <div style={{ display: "flex", gap: 6 }}>
-                        {[["terjual", "Terjual"], ["kol", "KOL"], ["event", "Event"]].map(([val, lbl]) => (
-                          <button key={val} onClick={() => setEditingTx(p => ({...p, channel: val}))} style={{ ...s.btn(editingTx.channel === val ? "primary" : "secondary"), flex: 1, fontSize: 11 }}>{lbl}</button>
+                        {[["event","Walk in"], ["wa","WA"], ["dm","DM"], ["web","Web"], ["shopee","Shopee"], ["tokopedia","Tokped"], ["consignment","Consign"], ["b2b","B2B"], ["kol","KOL"]].map(([val, lbl]) => (
+                          <button key={val} onClick={() => setEditingTx(p => ({...p, channel: val}))} style={{ ...s.btn(editingTx.channel === val ? "primary" : "secondary"), flex: 1, fontSize: 10, padding: "6px 2px" }}>{lbl}</button>
                         ))}
                       </div>
                     </div>
@@ -3882,10 +3914,11 @@ END $$;`;
       );
       const totalExp = filteredExpenses.reduce((s, e) => s + e.amount, 0);
       const totalInc = filteredIncomes.reduce((s, i) => s + i.amount, 0);
-      // kasirRev: semua channel kasir langsung (terjual/wa/dm/web/event) dari transactions
+      // kasirRev: semua channel kasir langsung (event/wa/dm/web + legacy terjual/direct) dari transactions
       // filteredIncomes sudah exclude auto-income b2c_direct/event untuk hindari double-count
+      const kasirChs = [...Object.keys(CHANNEL_SOURCE_MAP), "terjual", "direct"];
       const kasirRev = filterByPeriod(
-        transactions.filter(t => t.tipe === "keluar" && Object.keys(CHANNEL_SOURCE_MAP).includes(t.channel)),
+        transactions.filter(t => t.tipe === "keluar" && kasirChs.includes(t.channel)),
         keuanganPeriod
       ).reduce((sum, t) => sum + (t.jumlah * t.harga), 0);
       const totalRevenue = kasirRev + totalInc;
@@ -4303,25 +4336,45 @@ END $$;`;
                   </div>
                 </div>
 
-                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 12, color: COLORS.textMuted }}>
-                  <div style={{ fontWeight: 600, color: COLORS.cream, marginBottom: 4 }}>Sheet yang akan di-export (Excel):</div>
-                  <div>1. <strong style={{ color: COLORS.aqua }}>Expense Import</strong> — Siap upload ke Jurnal.id → Expense → Import</div>
-                  <div>2. <strong style={{ color: COLORS.aqua }}>Receive Payment Import</strong> — Income (COA 4-40000 + Tags per channel)</div>
-                  <div>3. <strong style={{ color: COLORS.aqua }}>Expenses</strong> — Raw detail pengeluaran (referensi internal)</div>
-                  <div>4. <strong style={{ color: COLORS.aqua }}>Incomes</strong> — Raw detail pemasukan + Tags (referensi internal)</div>
-                  <div>5. <strong style={{ color: COLORS.aqua }}>P&L</strong> — Ringkasan laba rugi</div>
+                {/* Export Jurnal.id section */}
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 12, color: COLORS.textMuted }}>
+                  <div style={{ fontWeight: 600, color: COLORS.cream, marginBottom: 6 }}>📤 Upload ke Jurnal.id</div>
+                  <button onClick={exportExpenseCSV}
+                    style={{ ...s.btn("success"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+                    📄 Expense Import CSV — upload ke Jurnal.id
+                  </button>
+                  <button onClick={exportReceivePaymentExcel}
+                    style={{ ...s.btn("success"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700 }}>
+                    💰 Receive Payment Excel — upload ke Jurnal.id
+                  </button>
                 </div>
 
+                {/* Export Referensi Internal section */}
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 12, color: COLORS.textMuted }}>
+                  <div style={{ fontWeight: 600, color: COLORS.cream, marginBottom: 6 }}>📋 Referensi Internal</div>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                    <button onClick={exportExpensesRawExcel}
+                      style={{ ...s.btn("secondary"), flex: 1, padding: "9px 0", fontSize: 12, fontWeight: 700 }}>
+                      📑 Expenses Excel
+                    </button>
+                    <button onClick={exportIncomesRawExcel}
+                      style={{ ...s.btn("secondary"), flex: 1, padding: "9px 0", fontSize: 12, fontWeight: 700 }}>
+                      📈 Incomes Excel
+                    </button>
+                  </div>
+                  <button onClick={exportPLExcel}
+                    style={{ ...s.btn("secondary"), width: "100%", padding: "9px 0", fontSize: 12, fontWeight: 700 }}>
+                    📊 P&L Excel (Laba Rugi)
+                  </button>
+                </div>
+
+                {/* Export Semua */}
                 <button onClick={exportKeuanganExcel}
-                  style={{ ...s.btn("primary"), width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 800, marginBottom: 10 }}>
-                  📥 Download Excel (Jurnal.id Format)
+                  style={{ ...s.btn("primary"), width: "100%", padding: "12px 0", fontSize: 14, fontWeight: 800 }}>
+                  📥 Export Semua (5 Sheet Excel)
                 </button>
-                <button onClick={exportExpenseCSV}
-                  style={{ ...s.btn("success"), width: "100%", padding: "11px 0", fontSize: 14, fontWeight: 700 }}>
-                  📄 Download Expense CSV (Import Jurnal.id)
-                </button>
-                <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6, textAlign: "center" }}>
-                  CSV siap upload langsung ke Jurnal.id → Expense → Import
+                <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 5, textAlign: "center" }}>
+                  Expense Import · Receive Payment · Expenses · Incomes · P&L
                 </div>
               </div>
 
@@ -4400,6 +4453,13 @@ WHERE tags IS NULL;`}
                   style={{ ...s.btn("warning"), marginTop: 8, fontSize: 12, padding: "8px 16px" }}>
                   📋 Copy Backfill SQL
                 </button>
+                <button onClick={runBackfillCOA}
+                  style={{ ...s.btn("success"), marginTop: 8, marginLeft: 8, fontSize: 12, padding: "8px 16px", fontWeight: 700 }}>
+                  ⚡ Jalankan Backfill Sekarang
+                </button>
+                <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6 }}>
+                  Klik untuk update langsung via Supabase — tidak perlu buka SQL Editor.
+                </div>
               </div>
             </div>
           )}
