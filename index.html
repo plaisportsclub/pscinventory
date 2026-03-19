@@ -1090,6 +1090,28 @@ function PlaiInventory() {
     sbUpsertInventory(data.sku, newStok);
     sbInsertTx(tx);
 
+    // Gap 3 fix: Auto-create Freight & Delivery expense when Plai pays shipping
+    // Dr. 6-60221 Freight & Delivery / Cr. 1-10002-2 Bank BCA Gaby
+    if (data.shipping === "plai" && data.shippingCost > 0 && data.channel !== "kol") {
+      const ts = Date.now();
+      const dateStr = (data.tanggal || new Date().toISOString().split("T")[0]).replace(/-/g, "");
+      const freightExp = {
+        id: ts,
+        date: data.tanggal || new Date().toISOString().split("T")[0],
+        expense_number: `EXP-${dateStr}-SHIP-${String(ts).slice(-4)}`,
+        from_account_code: "1-10002-2",
+        account_code: "6-60221",
+        account_name: "Freight & Delivery",
+        description: `Ongkir customer (Plai): ${data.nama} x${data.jumlah}${data.catatan ? " — " + data.catatan : ""}`,
+        amount: data.shippingCost,
+        payment_method: "transfer",
+        recipient: "Kurir (JNE/Sicepat/dll)",
+        tags: "Shipping; Customer Order; Freight"
+      };
+      setExpenses(prev => [freightExp, ...prev]);
+      if (sbClient) sbClient.from('expenses').insert([freightExp]);
+    }
+
     // KOL: auto-create marketing expense (6-60007), no income
     // Entry 1: Produk (Dr. 6-60007 / Cr. 1-10200 Inventory) — pakai HPP bukan harga jual
     // Entry 2: Ongkir (Dr. 6-60007 / Cr. 1-10002-2 Bank) — jika ada ongkir
@@ -1139,13 +1161,17 @@ function PlaiInventory() {
     }
 
     // Auto-create income record for revenue-generating channels
+    // Gap 2 fix: Split product revenue (4-40000) and shipping income (4-40300) into separate records
     const source = CHANNEL_SOURCE_MAP[data.channel];
     if (source) {
       const ts = Date.now();
       const dateStr = (data.tanggal || new Date().toISOString().split("T")[0]).replace(/-/g, "");
       const harga = item?.harga || 0;
-      const incomeAmount = harga * data.jumlah + (data.pelangganShipCost || 0);
-      const inc = {
+      const produkAmt = harga * data.jumlah;
+      const ongkirAmt = data.pelangganShipCost || 0;
+      const toInsertInc = [];
+      // Record 1: Product revenue → 4-40000 Revenues - Products
+      toInsertInc.push({
         id: ts,
         date: data.tanggal || new Date().toISOString().split("T")[0],
         income_number: `INC-${dateStr}-${String(ts).slice(-4)}`,
@@ -1154,15 +1180,34 @@ function PlaiInventory() {
         channel: data.channel,
         tags: CHANNEL_TAGS[data.channel] || "",
         description: `Penjualan ${data.nama} x${data.jumlah}${data.catatan ? " — " + data.catatan : ""}`,
-        amount: incomeAmount,
+        amount: produkAmt,
         payment_method: "transfer",
         customer: data.customer || "",
         pay_to_account_code: "1-10002-2",
         invoice_number: null,
         source_type: source
-      };
-      setIncomes(prev => [inc, ...prev]);
-      sbInsertIncome(inc);
+      });
+      // Record 2: Shipping income → 4-40300 Shipping Income (only if customer pays ongkir)
+      if (ongkirAmt > 0) {
+        toInsertInc.push({
+          id: ts + 1,
+          date: data.tanggal || new Date().toISOString().split("T")[0],
+          income_number: `INC-${dateStr}-SHIP-${String(ts+1).slice(-4)}`,
+          source,
+          revenue_account_code: "4-40300",
+          channel: data.channel,
+          tags: (CHANNEL_TAGS[data.channel] || "") + "; Shipping Income",
+          description: `Ongkir customer: ${data.nama} x${data.jumlah}${data.catatan ? " — " + data.catatan : ""}`,
+          amount: ongkirAmt,
+          payment_method: "transfer",
+          customer: data.customer || "",
+          pay_to_account_code: "1-10002-2",
+          invoice_number: null,
+          source_type: source
+        });
+      }
+      setIncomes(prev => [...toInsertInc, ...prev]);
+      toInsertInc.forEach(i => sbInsertIncome(i));
     }
   };
 
@@ -1798,7 +1843,14 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
 
   // ── Shared export data builder (called by all individual export fns) ──
   const buildExportData = () => {
-    const filteredExp = filterByPeriod(expenses, keuanganPeriod);
+    // Exclude ALL inventory-related entries from Expense CSV:
+    // 1. account_code = "1-10200" → vendor inventory-in (Dr. Inventory / Cr. Bank) → Journal Entry
+    // 2. from_account_code = "1-10200" → KOL produk (Dr. 6-60007 / Cr. Inventory) → KOL Journal
+    // Only KOL ongkir (from_account_code = bank) and regular cash expenses go to Expense CSV.
+    const filteredExp = filterByPeriod(
+      expenses.filter(e => e.account_code !== "1-10200" && e.from_account_code !== "1-10200"),
+      keuanganPeriod
+    );
     const filteredInc = filterByPeriod(
       incomes.filter(i => !["b2c_direct", "event"].includes(i.source_type)),
       keuanganPeriod
