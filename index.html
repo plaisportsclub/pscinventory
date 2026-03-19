@@ -1167,7 +1167,8 @@ function PlaiInventory() {
       const ts = Date.now();
       const dateStr = (data.tanggal || new Date().toISOString().split("T")[0]).replace(/-/g, "");
       const harga = item?.harga || 0;
-      const produkAmt = harga * data.jumlah;
+      // FIX 2: Kurangi diskon dari income agar mencerminkan harga aktual yang dibayar pelanggan
+      const produkAmt = Math.max(0, (harga * data.jumlah) - (data.diskon || 0));
       const ongkirAmt = data.pelangganShipCost || 0;
       const toInsertInc = [];
       // Record 1: Product revenue → 4-40000 Revenues - Products
@@ -1274,6 +1275,31 @@ function PlaiInventory() {
     showToast(`⚠ ${data.nama} ${data.jumlah} unit dicatat rusak/hilang`, "warning");
     sbUpsertInventory(data.sku, newStok);
     sbInsertTx(tx);
+    // Gap 4 fix: Auto-create Waste & Damaged Goods expense
+    // Dr. 6-60216 Waste & Damaged Goods / Cr. 1-10200 Inventory (@ HPP)
+    const hpp = item?.hpp || 0;
+    const wasteAmt = hpp * data.jumlah;
+    if (wasteAmt === 0) {
+      showToast(`⚠ HPP belum diisi — kerugian tidak tercatat di P&L. Isi HPP di tab Cek Stok.`, "warning");
+    } else {
+      const ts = Date.now();
+      const dateStr = (data.tanggal || new Date().toISOString().split("T")[0]).replace(/-/g, "");
+      const wasteExp = {
+        id: ts,
+        date: data.tanggal || new Date().toISOString().split("T")[0],
+        expense_number: `WASTE-${dateStr}-${String(ts).slice(-4)}`,
+        from_account_code: "1-10200",
+        account_code: "6-60216",
+        account_name: "Waste & Damaged Goods",
+        description: `Barang rusak/hilang: ${data.nama} x${data.jumlah} HPP@${hpp.toLocaleString("id-ID")}${data.catatan ? " — " + data.catatan : ""}`,
+        amount: wasteAmt,
+        payment_method: "adjustment",
+        recipient: "-",
+        tags: "Waste; Damaged; INVENTORY-OUT"
+      };
+      setExpenses(prev => [wasteExp, ...prev]);
+      if (sbClient) sbClient.from('expenses').insert([wasteExp]);
+    }
   };
 
   const handlePinjam = (data) => {
@@ -1399,20 +1425,11 @@ function PlaiInventory() {
   const handleEditHarga = async (sku, hargaBaru) => {
     const hargaInt = parseInt(hargaBaru) || 0;
     if (hargaInt < 0) return showToast("Harga tidak valid", "danger");
-    // 1. Update inventory
+    // Update inventory harga saja.
+    // Harga baru hanya berlaku untuk transaksi selanjutnya. Histori tidak diubah.
     setInventory(prev => prev.map(i => i.sku === sku ? { ...i, harga: hargaInt } : i));
     if (sbClient) sbClient.from('inventory').update({ harga: hargaInt }).eq('sku', sku);
-    // 2. Update ALL transactions with this SKU (revise historical harga)
-    const affectedTx = transactions.filter(t => t.sku === sku);
-    setTransactions(prev => prev.map(t => t.sku === sku ? { ...t, harga: hargaInt } : t));
-    // 3. Batch update to Supabase
-    if (sbClient && affectedTx.length > 0) {
-      try {
-        const { error } = await sbClient.from('transactions').update({ harga: hargaInt }).eq('sku', sku);
-        if (error) { console.error('Bulk harga update error:', error); showToast('⚠ Harga lokal diupdate, tapi sync ke database gagal: ' + error.message, 'warning'); }
-      } catch(e) { console.error('handleEditHarga sync error:', e); }
-    }
-    showToast(`✓ Harga ${sku} diupdate ke Rp ${hargaInt.toLocaleString("id-ID")} — ${affectedTx.length} transaksi direvisi`);
+    showToast(`✓ Harga ${sku} diupdate ke Rp ${hargaInt.toLocaleString("id-ID")} — berlaku untuk transaksi baru`);
     setEditHarga(null);
   };
 
@@ -1865,7 +1882,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const kasirChs = [...Object.keys(CHANNEL_SOURCE_MAP), "terjual", "direct"];
     const kasirRevenue = filterByPeriod(
       transactions.filter(t => t.tipe === "keluar" && kasirChs.includes(t.channel)), keuanganPeriod
-    ).reduce((sum, t) => sum + (t.jumlah * t.harga), 0);
+    ).reduce((sum, t) => sum + (t.jumlah * t.harga) - (t.diskon || 0), 0);
     const totalExpByAccount = {};
     filteredExp.forEach(e => { if (!totalExpByAccount[e.account_code]) totalExpByAccount[e.account_code]={name:e.account_name,total:0}; totalExpByAccount[e.account_code].total+=e.amount; });
     const totalIncBySrc = {};
