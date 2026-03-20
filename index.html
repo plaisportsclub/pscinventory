@@ -151,6 +151,19 @@ const save = (key, val) => {
 // parseRp: handle Indonesian number format — 10.000 → 10000, 1.500.000 → 1500000
 const parseRp = (v) => parseInt(String(v || "").replace(/\./g, "").replace(/,/g, "")) || 0;
 
+// ── CHANNEL constants defined at module level so ItemForm can access them ──
+const CHANNEL_TAGS = {
+  event: "Event; Offline B2C",
+  web: "Shopify; Online B2C",
+  wa: "WA; Online B2C",
+  dm: "DM; Online B2C",
+  shopee: "Shopee; Online B2C",
+  tokopedia: "Tokopedia; Online B2C",
+  tiktok: "TikTok; Online B2C",
+  consignment: "Consignment",
+  b2b: "B2B",
+};
+
 // ── ItemForm defined OUTSIDE PlaiInventory so React keeps its identity stable ──
 // This prevents state (selected SKU, form fields) from resetting on parent re-render
 const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, onOpenCamera, barcodeMap, onBarcodeNotFound }) => {
@@ -1011,18 +1024,8 @@ function PlaiInventory() {
     shopee: "4-40000", tokopedia: "4-40000", tiktok: "4-40000",
     consignment: "4-40000", b2b: "4-40000",
   };
-  // Jurnal.id tags per channel
-  const CHANNEL_TAGS = {
-    event: "Event; Offline B2C",
-    web: "Shopify; Online B2C",
-    wa: "WA; Online B2C",
-    dm: "DM; Online B2C",
-    shopee: "Shopee; Online B2C",
-    tokopedia: "Tokopedia; Online B2C",
-    tiktok: "Tokopedia; Online B2C",
-    consignment: "Consignment",
-    b2b: "B2B",
-  };
+  // Jurnal.id tags per channel — uses global CHANNEL_TAGS (defined above ItemForm)
+  // TikTok fix: was "Tokopedia; Online B2C", now "TikTok; Online B2C" in global def
   const CHANNEL_LABELS = {
     event: "Walk in/Event", wa: "WA Order", dm: "DM Order", web: "Website",
     shopee: "Shopee", tokopedia: "Tokped/Tiktok", tiktok: "TikTok",
