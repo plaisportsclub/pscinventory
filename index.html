@@ -496,6 +496,8 @@ function PlaiInventory() {
   const [deleteConfirm, setDeleteConfirm] = useState(null); // sku yang sedang dikonfirmasi hapus
   const [editHarga, setEditHarga] = useState(null); // { sku, nama, hargaLama, hargaBaru }
   const [editHpp, setEditHpp] = useState(null); // { sku, nama, hppLama, hppBaru }
+  const [showNewSkuForm, setShowNewSkuForm] = useState(false);
+  const [newSkuForm, setNewSkuForm] = useState({ sku: "", nama: "", harga: "", hpp: "", stok: "" });
   // discontinued / arsip
   const [showDiscontinued, setShowDiscontinued] = useState(false);
 
@@ -1411,6 +1413,28 @@ function PlaiInventory() {
     setKasirMarketplace(false);
     setKasirPelangganShipCost("");
     setKasirChannel("event");
+  };
+
+  const handleAddNewSku = async () => {
+    const sku = newSkuForm.sku.trim().toUpperCase();
+    const nama = newSkuForm.nama.trim();
+    const harga = parseInt(String(newSkuForm.harga).replace(/\./g, "")) || 0;
+    const hpp = parseInt(String(newSkuForm.hpp).replace(/\./g, "")) || 0;
+    const stok = parseInt(newSkuForm.stok) || 0;
+    if (!sku) return showToast("Product Code tidak boleh kosong", "danger");
+    if (!nama) return showToast("Nama produk tidak boleh kosong", "danger");
+    if (inventory.find(i => i.sku === sku)) return showToast(`SKU ${sku} sudah terdaftar di inventory`, "danger");
+    const newItem = { sku, nama, harga, hpp, stok, minimum: 3, satuan: "pcs", kategori: "", discontinued: false };
+    setInventory(prev => [...prev, newItem]);
+    if (sbClient) {
+      const { error } = await sbClient.from('inventory').upsert([newItem], { onConflict: 'sku' });
+      if (error) showToast(`⚠ SKU ditambah lokal, sync DB gagal: ${error.message}`, "warning");
+      else { showToast(`✓ SKU ${sku} — ${nama} berhasil ditambahkan!`); sbRefetchInventory(); }
+    } else {
+      showToast(`✓ SKU ${sku} — ${nama} ditambahkan (lokal saja — DB belum terhubung)`);
+    }
+    setNewSkuForm({ sku: "", nama: "", harga: "", hpp: "", stok: "" });
+    setShowNewSkuForm(false);
   };
 
   const handleDeleteProduct = (sku) => {
@@ -2765,6 +2789,88 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       return (
       <div style={{ maxWidth: 560 }}>
         <p style={{ color: COLORS.textMuted, marginBottom: 20, fontSize: 13 }}>Catat barang yang masuk dari supplier atau restock.</p>
+
+        {/* ── Input SKU Baru ──────────────────────────────────── */}
+        <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.success}40` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={s.cardTitle}>➕ Input SKU Baru</div>
+            <button
+              onClick={() => { setShowNewSkuForm(v => !v); setNewSkuForm({ sku: "", nama: "", harga: "", hpp: "", stok: "" }); }}
+              style={{ background: showNewSkuForm ? COLORS.brownDark : COLORS.success, color: showNewSkuForm ? COLORS.textMuted : COLORS.brownDark, border: `1px solid ${COLORS.success}60`, borderRadius: 6, padding: "5px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              {showNewSkuForm ? "Batal" : "Tambah SKU"}
+            </button>
+          </div>
+          <p style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 4, marginBottom: showNewSkuForm ? 16 : 0 }}>
+            Daftarkan produk baru ke inventory — satu SKU per form.
+          </p>
+          {showNewSkuForm && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Product Code (SKU) *</label>
+                  <input
+                    value={newSkuForm.sku}
+                    onChange={e => setNewSkuForm(f => ({ ...f, sku: e.target.value.toUpperCase() }))}
+                    placeholder="contoh: MMW2013L"
+                    style={{ ...s.input, width: "100%", boxSizing: "border-box", fontFamily: "monospace", textTransform: "uppercase" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Nama Produk *</label>
+                  <input
+                    value={newSkuForm.nama}
+                    onChange={e => setNewSkuForm(f => ({ ...f, nama: e.target.value }))}
+                    placeholder="contoh: Jersey Plai L"
+                    style={{ ...s.input, width: "100%", boxSizing: "border-box" }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Harga Jual (Rp)</label>
+                  <input
+                    value={newSkuForm.harga}
+                    onChange={e => setNewSkuForm(f => ({ ...f, harga: e.target.value }))}
+                    placeholder="0"
+                    type="number"
+                    style={{ ...s.input, width: "100%", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>HPP / Buy Price (Rp)</label>
+                  <input
+                    value={newSkuForm.hpp}
+                    onChange={e => setNewSkuForm(f => ({ ...f, hpp: e.target.value }))}
+                    placeholder="0"
+                    type="number"
+                    style={{ ...s.input, width: "100%", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Total Stok Awal</label>
+                  <input
+                    value={newSkuForm.stok}
+                    onChange={e => setNewSkuForm(f => ({ ...f, stok: e.target.value }))}
+                    placeholder="0"
+                    type="number"
+                    min="0"
+                    style={{ ...s.input, width: "100%", boxSizing: "border-box" }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+                <button onClick={() => { setShowNewSkuForm(false); setNewSkuForm({ sku: "", nama: "", harga: "", hpp: "", stok: "" }); }}
+                  style={{ ...s.btn("secondary"), fontSize: 13 }}>Batal</button>
+                <button onClick={handleAddNewSku}
+                  style={{ ...s.btn("primary"), fontSize: 13, background: COLORS.success, color: COLORS.brownDark }}>
+                  ✓ Simpan SKU Baru
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+        {/* ── /Input SKU Baru ─────────────────────────────────── */}
+
         <ItemForm tipe="masuk" onSubmit={handleMasuk} inventory={inventory} showToast={showToast} styles={s} getStokColor={getStokColor} onOpenCamera={() => { setCameraTarget("form"); setCameraOpen(true); }} barcodeMap={barcodeMap} onBarcodeNotFound={(code) => setBarcodeRegister({ code })} />
 
         {/* Pengembalian Pinjaman Section */}
