@@ -147,6 +147,10 @@ const save = (key, val) => {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
 };
 
+// ── parseRp: defined at module level so ItemForm (outside PlaiInventory) can use it ──
+// parseRp: handle Indonesian number format — 10.000 → 10000, 1.500.000 → 1500000
+const parseRp = (v) => parseInt(String(v || "").replace(/\./g, "").replace(/,/g, "")) || 0;
+
 // ── ItemForm defined OUTSIDE PlaiInventory so React keeps its identity stable ──
 // This prevents state (selected SKU, form fields) from resetting on parent re-render
 const ItemForm = ({ tipe, onSubmit, inventory, showToast, styles, getStokColor, onOpenCamera, barcodeMap, onBarcodeNotFound }) => {
@@ -1880,9 +1884,13 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const fmtDate = (d) => { if (!d) return ""; const p = d.split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : d; };
     const revenueTag = (i) => { if (i.tags) return i.tags; const ch=(i.channel||"").toLowerCase(); return CHANNEL_TAGS[ch]||ch||""; };
     const kasirChs = [...Object.keys(CHANNEL_SOURCE_MAP), "terjual", "direct"];
+    // Hitung kasirRevenue dari tabel incomes (source_type = "b2c_direct") bukan dari transactions,
+    // agar diskon sudah otomatis terefleksi (amount di incomes sudah dikurangi diskon sejak handleKeluar).
+    // filteredInc di bawah sudah mengecualikan b2c_direct — jadi tidak ada double-counting.
     const kasirRevenue = filterByPeriod(
-      transactions.filter(t => t.tipe === "keluar" && kasirChs.includes(t.channel)), keuanganPeriod
-    ).reduce((sum, t) => sum + (t.jumlah * t.harga) - (t.diskon || 0), 0);
+      incomes.filter(i => i.source_type === "b2c_direct" || i.source === "b2c_direct"),
+      keuanganPeriod
+    ).reduce((s, i) => s + (i.amount || 0), 0);
     const totalExpByAccount = {};
     filteredExp.forEach(e => { if (!totalExpByAccount[e.account_code]) totalExpByAccount[e.account_code]={name:e.account_name,total:0}; totalExpByAccount[e.account_code].total+=e.amount; });
     const totalIncBySrc = {};
@@ -2730,10 +2738,10 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                 </div>
 
                 {parseInt(editHarga.hargaBaru) !== editHarga.hargaLama && (
-                  <div style={{ background: COLORS.warning + "15", border: `1px solid ${COLORS.warning}40`, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 12 }}>
-                    <div style={{ color: COLORS.warning, fontWeight: 600, marginBottom: 4 }}>⚠ Perhatian</div>
-                    <div style={{ color: COLORS.cream }}>Semua transaksi yang sudah tercatat dengan SKU <strong>{editHarga.sku}</strong> akan direvisi harganya dari Rp {editHarga.hargaLama.toLocaleString("id-ID")} menjadi Rp {(parseInt(editHarga.hargaBaru) || 0).toLocaleString("id-ID")}. Rekap revenue di Laporan juga akan berubah.</div>
-                    <div style={{ color: COLORS.textMuted, marginTop: 6 }}>{transactions.filter(t => t.sku === editHarga.sku).length} transaksi akan direvisi</div>
+                  <div style={{ background: COLORS.aqua + "15", border: `1px solid ${COLORS.aqua}40`, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 12 }}>
+                    <div style={{ color: COLORS.aqua, fontWeight: 600, marginBottom: 4 }}>ℹ️ Info</div>
+                    <div style={{ color: COLORS.cream }}>Harga baru <strong>Rp {(parseInt(editHarga.hargaBaru) || 0).toLocaleString("id-ID")}</strong> hanya berlaku untuk transaksi selanjutnya.</div>
+                    <div style={{ color: COLORS.textMuted, marginTop: 6 }}>Histori {transactions.filter(t => t.sku === editHarga.sku).length} transaksi lama tidak diubah — P&amp;L bulan sebelumnya tetap akurat.</div>
                   </div>
                 )}
 
@@ -2741,7 +2749,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                   <button onClick={() => handleEditHarga(editHarga.sku, editHarga.hargaBaru)}
                     disabled={parseInt(editHarga.hargaBaru) === editHarga.hargaLama}
                     style={{ ...s.btn("primary"), flex: 1, opacity: parseInt(editHarga.hargaBaru) === editHarga.hargaLama ? 0.5 : 1 }}>
-                    Simpan & Revisi Semua
+                    Simpan Harga Baru
                   </button>
                   <button onClick={() => setEditHarga(null)} style={{ ...s.btn("secondary"), flex: 1 }}>Batal</button>
                 </div>
