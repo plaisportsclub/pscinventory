@@ -1207,7 +1207,7 @@ function PlaiInventory() {
   // ── handlers ────────────────────────────────────────────────────────────────
   // Strip fields not in transactions table to prevent Supabase insert failure
   const makeTxData = (data) => {
-    const { peminjam, tanggal, tipeKhusus, ...rest } = data;
+    const { peminjam, tanggal, tipeKhusus, mktHarga, mktOrderNo, mktOngkir, customer, ...rest } = data;
     return rest;
   };
 
