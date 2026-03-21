@@ -768,11 +768,7 @@ function PlaiInventory() {
   };
 
   // ── Production transaction helpers (used in masuk + laporan pages) ──
-  const isFlowATx = (t) => {
-    const result = t.tipe === "masuk" && /PROD-\d{8}-\d{4}/.test(t.catatan || "");
-    if (t.tipe === "masuk") console.log("isFlowATx check:", t.catatan, "→", result);
-    return result;
-  };
+  const isFlowATx = (t) => t.tipe === "masuk" && /PROD-\d{8}-\d{4}/.test(t.catatan || "");
   const isFlowBTx = (t) => t.tipe === "masuk" && (t.catatan || "").startsWith("White label dari");
   const isProductionTx = (t) => isFlowATx(t) || isFlowBTx(t);
 
