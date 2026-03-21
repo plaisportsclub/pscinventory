@@ -562,6 +562,7 @@ function PlaiInventory() {
   const [keuanganTab, setKeuanganTab] = useState("expense"); // "expense" | "income" | "summary" | "export"
   const [expenses, setExpenses] = useState(() => load("plai_expenses", []));
   const [incomes, setIncomes] = useState(() => load("plai_incomes", []));
+  const [journalEntries, setJournalEntries] = useState([]);
   // expense form
   const [expDate, setExpDate] = useState(new Date().toISOString().split("T")[0]);
   const [expAccount, setExpAccount] = useState("");
@@ -822,13 +823,14 @@ function PlaiInventory() {
     const loadAll = async () => {
       setSbSyncing(true);
       try {
-        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }, { data: expData, error: e5 }, { data: incData, error: e6 }] = await Promise.all([
+        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }, { data: expData, error: e5 }, { data: incData, error: e6 }, { data: jeData, error: e7 }] = await Promise.all([
           sbClient.from('inventory').select('*'),
           sbClient.from('transactions').select('*').order('id', { ascending: false }),
           sbClient.from('pinjaman').select('*').order('id', { ascending: false }),
           sbClient.from('barcode_map').select('*').then(r => r).catch(() => ({ data: null, error: null })),
           sbClient.from('expenses').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
           sbClient.from('incomes').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('journal_entries').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
         ]);
         if (e1 || e2 || e3) throw new Error((e1 || e2 || e3).message);
         if (inv && inv.length > 0) setInventory(inv);
@@ -841,6 +843,7 @@ function PlaiInventory() {
         }
         if (expData) setExpenses(expData);
         if (incData) setIncomes(incData);
+        if (jeData) setJournalEntries(jeData);
         setSbConnected(true);
         showToast('✓ Terhubung ke database!', 'success');
       } catch(e) {
@@ -879,6 +882,10 @@ function PlaiInventory() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'incomes' }, async () => {
         const { data } = await sbClient.from('incomes').select('*').order('id', { ascending: false });
         if (data) setIncomes(data);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'journal_entries' }, async () => {
+        const { data } = await sbClient.from('journal_entries').select('*').order('id', { ascending: false });
+        if (data) setJournalEntries(data);
       })
       .subscribe();
     return () => sbClient.removeChannel(ch);
@@ -1028,6 +1035,12 @@ function PlaiInventory() {
   // Delete transaction + revert stock + revert shipping expense
   const [deleteTxConfirm, setDeleteTxConfirm] = useState(null);
 
+  // Retur state
+  const [returConfirm, setReturConfirm] = useState(null); // transaksi asli yang mau diretur
+  const [returQty, setReturQty] = useState(1);
+  const [returAlasan, setReturAlasan] = useState("Cacat produk");
+  const [returTanggal, setReturTanggal] = useState(new Date().toISOString().split("T")[0]);
+
   const handleDeleteTx = (tx) => {
     // Revert stock
     const item = inventory.find(i => i.sku === tx.sku);
@@ -1046,6 +1059,149 @@ function PlaiInventory() {
     sbDeleteTx(tx.id);
     setDeleteTxConfirm(null);
     showToast(`✓ Transaksi dihapus — stok ${tx.nama} dikembalikan`);
+  };
+
+  // ── Retur handler ──────────────────────────────────────────────────────────
+  const handleRetur = (txAsli, qtyRetur, alasan, tanggalRetur) => {
+    // Validate qty
+    const totalSudahDiretur = transactions
+      .filter(t => t.tipe === "retur" && t.reference_id === txAsli.id)
+      .reduce((s, t) => s + t.jumlah, 0);
+    const maxQty = txAsli.jumlah - totalSudahDiretur;
+    if (qtyRetur < 1 || qtyRetur > maxQty) {
+      showToast(`⚠ Qty retur tidak valid. Maks ${maxQty} unit (sudah diretur ${totalSudahDiretur}).`, "danger");
+      return;
+    }
+
+    const item = inventory.find(i => i.sku === txAsli.sku);
+    const today = tanggalRetur || new Date().toISOString().split("T")[0];
+    const dateStr = today.replace(/-/g, "");
+    const ts = Date.now();
+    const lastFour = String(ts).slice(-4);
+    const hppSnap = txAsli.hpp_snapshot || item?.hpp || 0;
+
+    // a. Stok +qty retur
+    const newStok = (item?.stok || 0) + qtyRetur;
+    setInventory(prev => prev.map(i => i.sku === txAsli.sku ? { ...i, stok: i.stok + qtyRetur } : i));
+    sbUpsertInventory(txAsli.sku, newStok);
+
+    // b. Insert transaksi tipe "retur" dengan reference_id ke tx asli
+    const returTx = {
+      id: ts,
+      tanggal: today,
+      sku: txAsli.sku,
+      nama: txAsli.nama,
+      tipe: "retur",
+      jumlah: qtyRetur,
+      channel: txAsli.channel || "-",
+      shipping: "none",
+      shippingCost: 0,
+      pelangganShipCost: 0,
+      marketplace: false,
+      catatan: `RETUR: ${alasan}${txAsli.invoiceId ? " | Ref: " + txAsli.invoiceId : ""}`,
+      staff: txAsli.staff || STAFF_LIST[0],
+      harga: txAsli.harga || 0,
+      hpp_snapshot: hppSnap,
+      diskon: 0,
+      invoiceId: txAsli.invoiceId || null,
+      reference_id: txAsli.id
+    };
+    setTransactions(prev => [returTx, ...prev]);
+    sbInsertTx(returTx);
+
+    // c. Insert income record NEGATIF (reverse revenue)
+    // Hitung diskon proporsional: diskon asli / qty asli * qty retur
+    const diskonAsli = txAsli.diskon || 0;
+    const diskonProporsional = txAsli.jumlah > 0 ? Math.round(diskonAsli / txAsli.jumlah * qtyRetur) : 0;
+    const returIncomeAmt = -Math.max(0, (txAsli.harga || 0) * qtyRetur - diskonProporsional);
+    const source = CHANNEL_SOURCE_MAP[txAsli.channel];
+    const revenueAccCode = CHANNEL_REVENUE_MAP[txAsli.channel] || "4-40000";
+    if (source) {
+      const returIncome = {
+        id: ts + 1,
+        date: today,
+        income_number: `RETUR-${dateStr}-${lastFour}`,
+        source,
+        revenue_account_code: revenueAccCode,
+        channel: txAsli.channel,
+        tags: (CHANNEL_TAGS[txAsli.channel] || "") + "; Retur",
+        description: `RETUR: ${txAsli.nama} x${qtyRetur} — ${alasan}`,
+        amount: returIncomeAmt,
+        payment_method: "transfer",
+        customer: "",
+        pay_to_account_code: "1-10002-2",
+        invoice_number: null,
+        source_type: source
+      };
+      setIncomes(prev => [returIncome, ...prev]);
+      sbInsertIncome(returIncome);
+    }
+
+    // d. Insert 2 journal entries COGS reverse (Dr. 1-10200 / Cr. 5-50000)
+    if (hppSnap > 0) {
+      const cogsReverseAmt = hppSnap * qtyRetur;
+      const cogsRef = "RETUR-" + dateStr + "-" + lastFour;
+      const cogsMonth = today.substring(0, 7);
+      const cogsDesc = "RETUR COGS: " + txAsli.nama + " x" + qtyRetur + " — " + alasan;
+      const cogsReverseEntries = [
+        {
+          id: ts + 10,
+          date: today,
+          reference: cogsRef,
+          journal_type: "COGS",
+          debit_account: "1-10200",
+          credit_account: "",
+          amount: cogsReverseAmt,
+          description: cogsDesc,
+          source_sku: txAsli.sku,
+          source_id: String(returTx.id),
+          period_label: cogsMonth,
+          memo: "Auto-generated saat retur",
+          tags: "COGS; Retur; Auto"
+        },
+        {
+          id: ts + 11,
+          date: today,
+          reference: cogsRef,
+          journal_type: "COGS",
+          debit_account: "",
+          credit_account: "5-50000",
+          amount: cogsReverseAmt,
+          description: cogsDesc,
+          source_sku: txAsli.sku,
+          source_id: String(returTx.id),
+          period_label: cogsMonth,
+          memo: "Auto-generated saat retur",
+          tags: "COGS; Retur; Auto"
+        }
+      ];
+      setJournalEntries(prev => [...cogsReverseEntries, ...prev]);
+      if (sbClient) {
+        sbClient.from('journal_entries').insert(cogsReverseEntries)
+          .then(({ error }) => { if (error) console.error('COGS retur journal insert error:', error); })
+          .catch(e => console.error('COGS retur journal insert error:', e));
+      }
+    }
+
+    // e. Insert expense Sales Return (4-40200)
+    const salesReturnExp = {
+      id: ts + 20,
+      date: today,
+      expense_number: `RETUR-${dateStr}-${lastFour}`,
+      from_account_code: "1-10002-2",
+      account_code: "4-40200",
+      account_name: "Sales Return",
+      description: `Sales Return: ${txAsli.nama} x${qtyRetur} — ${alasan}`,
+      amount: (txAsli.harga || 0) * qtyRetur,
+      payment_method: "transfer",
+      recipient: "-",
+      tags: "Retur; Sales Return"
+    };
+    setExpenses(prev => [salesReturnExp, ...prev]);
+    if (sbClient) sbClient.from('expenses').insert([salesReturnExp]);
+
+    setReturConfirm(null);
+    showToast(`✓ Retur ${txAsli.nama} x${qtyRetur} berhasil dicatat — stok +${qtyRetur}, COGS reversed`);
   };
 
   // ── handlers ────────────────────────────────────────────────────────────────
@@ -1078,7 +1234,7 @@ function PlaiInventory() {
     const item = inventory.find(i => i.sku === data.sku);
     const newStok = Math.max(0, (item?.stok || 0) - data.jumlah);
     const txData = makeTxData(data);
-    const tx = { id: Date.now() + Math.floor(Math.random() * 1000), tanggal: data.tanggal || new Date().toISOString().split("T")[0], tipe: "keluar", harga: item?.harga || 0, ...txData };
+    const tx = { id: Date.now() + Math.floor(Math.random() * 1000), tanggal: data.tanggal || new Date().toISOString().split("T")[0], tipe: "keluar", harga: item?.harga || 0, hpp_snapshot: item?.hpp || 0, ...txData };
     setInventory(prev => prev.map(i => i.sku === data.sku ? { ...i, stok: Math.max(0, i.stok - data.jumlah) } : i));
     setTransactions(prev => [tx, ...prev]);
     showToast(`✓ Barang keluar ${data.nama} -${data.jumlah} dicatat`);
@@ -1204,6 +1360,60 @@ function PlaiInventory() {
       }
       setIncomes(prev => [...toInsertInc, ...prev]);
       toInsertInc.forEach(i => sbInsertIncome(i));
+    }
+
+    // ── Auto-generate COGS journal entry (all channels except kol/pinjam) ──
+    // kol already returned above; pinjam already returned at top of handleKeluar
+    const hpp = item?.hpp || 0;
+    const cogsAmt = hpp * data.jumlah;
+    const cogsToday = data.tanggal || new Date().toISOString().split("T")[0];
+    const cogsDateStr = cogsToday.replace(/-/g, "");
+    const cogsMonth = cogsToday.substring(0, 7);
+    const txNum = "COGS-" + cogsDateStr + "-" + String(Date.now()).slice(-4);
+
+    if (hpp === 0) {
+      showToast(`⚠ HPP belum diset untuk ${data.sku} — COGS tidak tercatat. Isi HPP di tab Cek Stok.`, "warning");
+    } else {
+      const cogsDesc = "COGS: " + data.nama + " x" + data.jumlah;
+      const cogsEntries = [
+        {
+          id: Date.now() + 10,
+          date: cogsToday,
+          reference: txNum,
+          journal_type: "COGS",
+          debit_account: "5-50000",
+          credit_account: "",
+          amount: cogsAmt,
+          description: cogsDesc,
+          source_sku: data.sku,
+          source_id: String(tx.id),
+          period_label: cogsMonth,
+          memo: "Auto-generated saat penjualan",
+          tags: "COGS; Auto"
+        },
+        {
+          id: Date.now() + 11,
+          date: cogsToday,
+          reference: txNum,
+          journal_type: "COGS",
+          debit_account: "",
+          credit_account: "1-10200",
+          amount: cogsAmt,
+          description: cogsDesc,
+          source_sku: data.sku,
+          source_id: String(tx.id),
+          period_label: cogsMonth,
+          memo: "Auto-generated saat penjualan",
+          tags: "COGS; Auto"
+        }
+      ];
+      setJournalEntries(prev => [...cogsEntries, ...prev]);
+      if (sbClient) {
+        sbClient.from('journal_entries').insert(cogsEntries)
+          .then(({ error }) => { if (error) console.error('COGS journal insert error:', error); })
+          .catch(e => console.error('COGS journal insert error:', e));
+      }
+      showToast(`📊 COGS Rp ${cogsAmt.toLocaleString("id-ID")} (${data.sku} x${data.jumlah} @HPP ${hpp.toLocaleString("id-ID")})`);
     }
   };
 
@@ -2070,6 +2280,58 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     XLSX.writeFile(wb, `Plai_COGS_Journal_${getPeriodLabel()}_${getDateStr()}.xlsx`);
     const totalCOGS = Object.values(hppMap).reduce((s,d)=>s+d.total,0);
     showToast(`✓ COGS Journal: ${journalRows.length/2} entries · Total Rp ${totalCOGS.toLocaleString("id-ID")}${noHppSkus.size>0?" · ⚠ "+noHppSkus.size+" SKU skip (no HPP)":""}`);
+  };
+
+  // ── Export 6b: COGS Journal Entry CSV (format Jurnal.id — dari journal_entries realtime) ──
+  const exportCOGSJournalCSV = () => {
+    const cogsEntries = filterByPeriod(
+      journalEntries.filter(je => je.journal_type === "COGS"),
+      keuanganPeriod
+    );
+    if (cogsEntries.length === 0) {
+      showToast("⚠ Tidak ada COGS journal entries di periode ini. Pastikan ada penjualan dengan HPP terisi.", "warning");
+      return;
+    }
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const p = String(d).split("-");
+      return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : d;
+    };
+    // Group by reference to pair debit+credit
+    const byRef = {};
+    cogsEntries.forEach(je => {
+      if (!byRef[je.reference]) byRef[je.reference] = [];
+      byRef[je.reference].push(je);
+    });
+    const header = "*TransactionNumber,*TransactionDate,*AccountCode,Description,*Debit,*Credit,Memo,Tags";
+    const rows = [];
+    const skippedRefs = [];
+    Object.entries(byRef).forEach(([ref, entries]) => {
+      const debitEntry = entries.find(e => e.debit_account && e.debit_account !== "");
+      const creditEntry = entries.find(e => e.credit_account && e.credit_account !== "");
+      if (debitEntry && creditEntry) {
+        rows.push([ref, fmtDate(debitEntry.date), debitEntry.debit_account, debitEntry.description || "", debitEntry.amount || 0, "", debitEntry.memo || "", debitEntry.tags || ""]);
+        rows.push([ref, fmtDate(creditEntry.date), creditEntry.credit_account, creditEntry.description || "", "", creditEntry.amount || 0, creditEntry.memo || "", creditEntry.tags || ""]);
+      } else {
+        skippedRefs.push(ref);
+      }
+    });
+    if (skippedRefs.length > 0) {
+      console.warn('COGS export: skipped incomplete references:', skippedRefs);
+      showToast(`⚠ ${skippedRefs.length} COGS entry tidak lengkap di-skip. Cek tab Keuangan → Pengeluaran untuk detail.`, "warning");
+    }
+    const csvLines = [header, ...rows.map(r => r.map(c => {
+      const v = String(c ?? "");
+      return v.includes(",") || v.includes('"') || v.includes("\n") ? `"${v.replace(/"/g, '""')}"` : v;
+    }).join(","))];
+    const csv = csvLines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Plai_COGSJournalEntry_${getPeriodLabel()}_${getDateStr()}.csv`;
+    a.click();
+    const totalCOGS = cogsEntries.filter(e => e.debit_account === "5-50000").reduce((s, e) => s + (e.amount || 0), 0);
+    showToast(`✓ COGS CSV: ${rows.length / 2} transaksi · Total Rp ${totalCOGS.toLocaleString("id-ID")} — siap upload ke Jurnal.id`);
   };
 
   // ── Export 7: KOL Journal Entry (Dr. 6-60007 / Cr. 1-10200 atau 1-10002-2) ──
@@ -3123,6 +3385,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                   <td style={s.td}>{t.staff}</td>
                   <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                     <button onClick={() => { setEditingTx({...t}); setPage("laporan"); }} style={{ background: COLORS.aqua+"30", color: COLORS.aqua, border: `1px solid ${COLORS.aqua}50`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer", marginRight: 3 }}>Edit</button>
+                    <button onClick={() => { const maxQ = t.jumlah - transactions.filter(r => r.tipe === "retur" && r.reference_id === t.id).reduce((s,r) => s + r.jumlah, 0); setReturQty(maxQ > 0 ? maxQ : 1); setReturAlasan("Cacat produk"); setReturTanggal(new Date().toISOString().split("T")[0]); setReturConfirm(t); }} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer", marginRight: 3 }}>↩ Retur</button>
                     <button onClick={() => setDeleteTxConfirm(t)} style={{ background: COLORS.danger+"20", color: COLORS.danger, border: `1px solid ${COLORS.danger}40`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer" }}>Hapus</button>
                   </td>
                 </tr>
@@ -3493,6 +3756,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                       <td style={{ ...s.td, fontSize: 10, color: t.invoiceId ? COLORS.aqua : COLORS.textMuted, maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.invoiceId ? t.invoiceId.replace("INV-", "#") : "-"}</td>
                       <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                         <button onClick={() => setEditingTx({...t})} style={{ background: COLORS.aqua+"30", color: COLORS.aqua, border: `1px solid ${COLORS.aqua}50`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, marginRight: 4 }}>Edit</button>
+                        {t.tipe === "keluar" && <button onClick={() => { const maxQ = t.jumlah - transactions.filter(r => r.tipe === "retur" && r.reference_id === t.id).reduce((s,r) => s + r.jumlah, 0); setReturQty(maxQ > 0 ? maxQ : 1); setReturAlasan("Cacat produk"); setReturTanggal(new Date().toISOString().split("T")[0]); setReturConfirm(t); }} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, marginRight: 4 }}>↩ Retur</button>}
                         <button onClick={() => setDeleteTxConfirm(t)} style={{ background: COLORS.danger+"20", color: COLORS.danger, border: `1px solid ${COLORS.danger}40`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>Hapus</button>
                       </td>
                     </tr>
@@ -3531,6 +3795,90 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
               </div>
             </div>
           )}
+
+          {/* Retur Confirmation Modal */}
+          {returConfirm && (() => {
+            const rc = returConfirm;
+            const totalSudahDiretur = transactions.filter(t => t.tipe === "retur" && t.reference_id === rc.id).reduce((s, t) => s + t.jumlah, 0);
+            const maxQty = rc.jumlah - totalSudahDiretur;
+            const hppSnap = rc.hpp_snapshot || inventory.find(i => i.sku === rc.sku)?.hpp || 0;
+            const diskonProporsional = rc.jumlah > 0 ? Math.round((rc.diskon || 0) / rc.jumlah * returQty) : 0;
+            const revenueReverse = Math.max(0, (rc.harga || 0) * returQty - diskonProporsional);
+            const cogsReverse = hppSnap * returQty;
+            return (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setReturConfirm(null)}>
+                <div style={{ background: COLORS.brown, borderRadius: 14, padding: 24, width: 440, boxShadow: "0 8px 40px rgba(0,0,0,0.5)" }} onClick={e => e.stopPropagation()}>
+                  <div style={{ fontWeight: 700, color: COLORS.warning, fontSize: 16, marginBottom: 12 }}>↩ Retur Transaksi</div>
+
+                  {/* Info transaksi asli */}
+                  <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 14, marginBottom: 16 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.cream, marginBottom: 4 }}>{rc.nama}</div>
+                    <div style={{ fontSize: 12, color: COLORS.textMuted }}>
+                      {rc.tanggal} · {rc.jumlah} pcs · {CHANNEL_LABELS[rc.channel] || rc.channel} · Rp {(rc.harga || 0).toLocaleString("id-ID")}/pcs
+                    </div>
+                    {totalSudahDiretur > 0 && (
+                      <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 4 }}>Sudah diretur sebelumnya: {totalSudahDiretur} pcs</div>
+                    )}
+                    {maxQty <= 0 && (
+                      <div style={{ fontSize: 12, color: COLORS.danger, marginTop: 6, fontWeight: 600 }}>Semua qty sudah diretur — tidak bisa retur lagi.</div>
+                    )}
+                  </div>
+
+                  {maxQty > 0 && (<>
+                    {/* Qty retur */}
+                    <div style={{ marginBottom: 14 }}>
+                      <label style={s.label}>Qty Retur</label>
+                      <input style={s.input} type="number" min={1} max={maxQty} value={returQty}
+                        onChange={e => setReturQty(Math.max(1, Math.min(maxQty, parseInt(e.target.value) || 1)))} />
+                      <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 4 }}>Maks: {maxQty} pcs{totalSudahDiretur > 0 ? ` (sudah diretur: ${totalSudahDiretur} pcs)` : ""}</div>
+                    </div>
+
+                    {/* Alasan */}
+                    <div style={{ marginBottom: 14 }}>
+                      <label style={s.label}>Alasan Retur</label>
+                      <select style={s.select} value={returAlasan} onChange={e => setReturAlasan(e.target.value)}>
+                        <option>Cacat produk</option>
+                        <option>Salah ukuran</option>
+                        <option>Tidak sesuai deskripsi</option>
+                        <option>Lainnya</option>
+                      </select>
+                    </div>
+
+                    {/* Tanggal */}
+                    <div style={{ marginBottom: 16 }}>
+                      <label style={s.label}>Tanggal Retur</label>
+                      <input style={s.input} type="date" value={returTanggal} onChange={e => setReturTanggal(e.target.value)} max={new Date().toISOString().split("T")[0]} />
+                    </div>
+
+                    {/* Live preview */}
+                    <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, marginBottom: 16, border: `1px solid ${COLORS.warning}30` }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.warning, marginBottom: 8 }}>Yang akan terjadi:</div>
+                      <div style={{ fontSize: 12, color: COLORS.cream, lineHeight: 1.8 }}>
+                        <div>• Stok <span style={{ color: COLORS.success, fontWeight: 700 }}>+{returQty}</span> pcs</div>
+                        <div>• Revenue <span style={{ color: COLORS.danger, fontWeight: 700 }}>-Rp {revenueReverse.toLocaleString("id-ID")}</span></div>
+                        {hppSnap > 0
+                          ? <div>• COGS reverse <span style={{ color: COLORS.success, fontWeight: 700 }}>+Rp {cogsReverse.toLocaleString("id-ID")}</span></div>
+                          : <div style={{ color: COLORS.warning, fontSize: 11, marginTop: 4 }}>⚠ HPP tidak tersedia — COGS tidak akan di-reverse</div>
+                        }
+                      </div>
+                    </div>
+
+                    {/* Buttons */}
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => handleRetur(rc, returQty, returAlasan, returTanggal)} style={{ ...s.btn("warning"), flex: 1, color: COLORS.brownDark }}>Konfirmasi Retur</button>
+                      <button onClick={() => setReturConfirm(null)} style={{ ...s.btn("secondary"), flex: 1 }}>Batal</button>
+                    </div>
+                  </>)}
+
+                  {maxQty <= 0 && (
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => setReturConfirm(null)} style={{ ...s.btn("secondary"), flex: 1 }}>Tutup</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Edit Transaction Modal */}
           {editingTx && (
@@ -4833,10 +5181,19 @@ END $$;`;
                     Dr. 5-50000 COGS → Cr. 1-10200 Inventory Finished Products<br/>
                     Butuh HPP per SKU yang sudah diset di tab Cek Stok.
                   </div>
-                  <button onClick={exportCOGSJournal}
-                    style={{ ...s.btn("secondary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700, border: `1px solid ${COLORS.warning}60`, color: COLORS.warning }}>
-                    📊 COGS Journal Entry Excel
-                  </button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={exportCOGSJournal}
+                      style={{ ...s.btn("secondary"), flex: 1, padding: "10px 0", fontSize: 12, fontWeight: 700, border: `1px solid ${COLORS.warning}60`, color: COLORS.warning }}>
+                      📊 COGS Excel (retroaktif)
+                    </button>
+                    <button onClick={exportCOGSJournalCSV}
+                      style={{ ...s.btn("primary"), flex: 1, padding: "10px 0", fontSize: 12, fontWeight: 700 }}>
+                      📄 COGS CSV Jurnal.id
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6 }}>
+                    CSV = dari journal_entries real-time (hpp_snapshot saat jual) · Excel = retroaktif dari HPP saat ini
+                  </div>
                 </div>
 
                 {/* KOL Journal */}
