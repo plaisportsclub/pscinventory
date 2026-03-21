@@ -593,6 +593,8 @@ function PlaiInventory() {
 
   // ── Keuangan (Finance) state ──
   const [keuanganTab, setKeuanganTab] = useState("expense"); // "expense" | "income" | "summary" | "export"
+  const [expSourceFilter, setExpSourceFilter] = useState("semua"); // "semua" | "wa_bot" | "unverified"
+  const [verifyingExpense, setVerifyingExpense] = useState(null);
   const [expenses, setExpenses] = useState(() => load("plai_expenses", []));
   const [incomes, setIncomes] = useState(() => load("plai_incomes", []));
   const [journalEntries, setJournalEntries] = useState([]);
@@ -2479,6 +2481,16 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     showToast("Pengeluaran dihapus", "warning");
   };
 
+  const handleVerifyExpense = async (id) => {
+    setVerifyingExpense(id);
+    setExpenses(prev => prev.map(e => e.id === id ? { ...e, verified: true } : e));
+    if (sbClient) {
+      await sbClient.from('expenses').update({ verified: true }).eq('id', id).catch(() => {});
+    }
+    setVerifyingExpense(null);
+    showToast("✓ Expense diverifikasi");
+  };
+
   const deleteIncome = (id) => {
     setIncomes(prev => prev.filter(e => e.id !== id));
     deleteIncomeFromDb(id);
@@ -2993,6 +3005,65 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const totalDebit = prodEntries.filter(e => e.debit_account === "1-10200").reduce((s, e) => s + (e.amount || 0), 0);
     const refCount = Object.keys(byRef).length - skippedRefs.length;
     showToast(`✓ Production CSV: ${refCount} production orders · Total Rp ${totalDebit.toLocaleString("id-ID")} — siap upload ke Jurnal.id`);
+  };
+
+  // ── Export 8b: Purchase Journal Entry CSV (format Jurnal.id) ──
+  const exportPurchaseJournalCSV = () => {
+    const purchaseTypes = ["PURCHASE_DP", "PURCHASE_PELUNASAN", "INVENTORY_IN"];
+    const purchaseEntries = filterByPeriod(
+      journalEntries.filter(je => purchaseTypes.includes(je.journal_type)),
+      keuanganPeriod
+    );
+    if (purchaseEntries.length === 0) {
+      showToast("⚠ Tidak ada Purchase journal entries di periode ini.", "warning");
+      return;
+    }
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const p = String(d).split("-");
+      return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : d;
+    };
+    // Group by reference — each purchase has 1+ debits + 1+ credits
+    const byRef = {};
+    purchaseEntries.forEach(je => {
+      if (!byRef[je.reference]) byRef[je.reference] = [];
+      byRef[je.reference].push(je);
+    });
+    const header = "*TransactionNumber,*TransactionDate,*AccountCode,Description,*Debit,*Credit,Memo,Tags";
+    const rows = [];
+    const skippedRefs = [];
+    Object.entries(byRef).forEach(([ref, entries]) => {
+      const debitEntries = entries.filter(e => e.debit_account && e.debit_account !== "");
+      const creditEntries = entries.filter(e => e.credit_account && e.credit_account !== "");
+      if (debitEntries.length === 0 || creditEntries.length === 0) { skippedRefs.push(ref); return; }
+      debitEntries.forEach(de => {
+        rows.push([ref, fmtDate(de.date), de.debit_account, de.description || "", de.amount || 0, "", de.memo || "", de.tags || ""]);
+      });
+      creditEntries.forEach(ce => {
+        rows.push([ref, fmtDate(ce.date), ce.credit_account, ce.description || "", "", ce.amount || 0, ce.memo || "", ce.tags || ""]);
+      });
+    });
+    if (skippedRefs.length > 0) {
+      console.warn("Purchase export: skipped incomplete references:", skippedRefs);
+      showToast(`⚠ ${skippedRefs.length} purchase entry tidak lengkap di-skip.`, "warning");
+    }
+    if (rows.length === 0) {
+      showToast("⚠ Tidak ada data untuk di-export setelah filter.", "warning");
+      return;
+    }
+    const csvLines = [header, ...rows.map(r => r.map(c => {
+      const v = String(c ?? "");
+      return v.includes(",") || v.includes('"') || v.includes("\n") ? `"${v.replace(/"/g, '""')}"` : v;
+    }).join(","))];
+    const csv = csvLines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Plai_PurchaseJournalEntry_${getPeriodLabel()}_${getDateStr()}.csv`;
+    a.click();
+    const totalDebit = purchaseEntries.filter(e => e.debit_account).reduce((s, e) => s + (e.amount || 0), 0);
+    const refCount = Object.keys(byRef).length - skippedRefs.length;
+    showToast(`✓ Purchase CSV: ${refCount} transaksi · Total Dr Rp ${totalDebit.toLocaleString("id-ID")} — siap upload ke Jurnal.id`);
   };
 
   // ── Export Settlement Journal Entry CSV for Jurnal.id ──
@@ -6346,6 +6417,11 @@ END $$;`;
     },
     keuangan: () => {
       const filteredExpenses = filterByPeriod(expenses, keuanganPeriod);
+      const displayExpenses = expSourceFilter === "wa_bot"
+        ? filteredExpenses.filter(e => e.source === "wa_bot")
+        : expSourceFilter === "unverified"
+          ? filteredExpenses.filter(e => !e.verified)
+          : filteredExpenses;
       // Exclude auto-income records yang dibuat oleh kasir (source_type: b2c_direct / event)
       // karena revenue kasir sudah dihitung lewat kasirRev dari transactions — hindari double-count
       const filteredIncomes = filterByPeriod(
@@ -6396,6 +6472,26 @@ END $$;`;
               </button>
             ))}
           </div>
+
+          {/* Source filter chips — only on Expense tab */}
+          {keuanganTab === "expense" && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              {[
+                { id: "semua", label: "Semua" },
+                { id: "wa_bot", label: "🤖 WA Bot" },
+                { id: "unverified", label: "⚠ Belum Diverifikasi" },
+              ].map(f => (
+                <button key={f.id} onClick={() => setExpSourceFilter(f.id)}
+                  style={{ padding: "5px 12px", background: expSourceFilter === f.id ? COLORS.aqua : "transparent",
+                    color: expSourceFilter === f.id ? COLORS.brownDark : COLORS.textMuted,
+                    border: `1px solid ${expSourceFilter === f.id ? COLORS.aqua : COLORS.brownLight}`,
+                    borderRadius: 16, fontSize: 11, fontWeight: expSourceFilter === f.id ? 700 : 400,
+                    cursor: "pointer" }}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Quick stats bar */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 20 }}>
@@ -6486,18 +6582,39 @@ END $$;`;
               </div>
 
               {/* Expense list */}
-              <h3 style={{ color: COLORS.cream, marginBottom: 8, fontSize: 14 }}>Riwayat Pengeluaran ({filteredExpenses.length})</h3>
-              {filteredExpenses.length === 0 && <div style={{ color: COLORS.textMuted, fontSize: 13, textAlign: "center", padding: 30 }}>Belum ada data pengeluaran</div>}
-              {filteredExpenses.map(exp => (
+              <h3 style={{ color: COLORS.cream, marginBottom: 8, fontSize: 14 }}>Riwayat Pengeluaran ({displayExpenses.length})</h3>
+              {displayExpenses.length === 0 && <div style={{ color: COLORS.textMuted, fontSize: 13, textAlign: "center", padding: 30 }}>Belum ada data pengeluaran</div>}
+              {displayExpenses.map(exp => (
                 <div key={exp.id} style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, marginBottom: 8, border: `1px solid ${COLORS.brownLight}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: COLORS.cream }}>{exp.account_name}</div>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: COLORS.cream, display: "flex", alignItems: "center", gap: 6 }}>
+                      {exp.account_name}
+                      <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 8, fontWeight: 600,
+                        background: exp.source === "wa_bot" ? "#16a34a22" : "#6b728022",
+                        color: exp.source === "wa_bot" ? "#4ade80" : "#9ca3af",
+                        border: `1px solid ${exp.source === "wa_bot" ? "#4ade8044" : "#6b728044"}` }}>
+                        {exp.source === "wa_bot" ? "🤖 WA Bot" : "✏ Manual"}
+                      </span>
+                    </div>
                     <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>{exp.date} · {exp.description || "-"}{exp.recipient ? ` → ${exp.recipient}` : ""}</div>
                   </div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontWeight: 700, color: COLORS.danger, fontSize: 14 }}>-{fmt(exp.amount)}</div>
-                    <button onClick={() => deleteExpense(exp.id)}
-                      style={{ background: "transparent", border: "none", color: COLORS.textMuted, fontSize: 10, cursor: "pointer", marginTop: 2 }}>hapus</button>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 3 }}>
+                      {exp.verified ? (
+                        <span style={{ fontSize: 10, color: "#4ade80", fontWeight: 600 }}>✓ Verified</span>
+                      ) : (
+                        <button onClick={() => handleVerifyExpense(exp.id)}
+                          disabled={verifyingExpense === exp.id}
+                          style={{ background: "#f59e0b22", border: "1px solid #f59e0b44", color: "#fbbf24",
+                            fontSize: 10, padding: "2px 8px", borderRadius: 6, cursor: verifyingExpense === exp.id ? "wait" : "pointer",
+                            fontWeight: 600, opacity: verifyingExpense === exp.id ? 0.5 : 1 }}>
+                          {verifyingExpense === exp.id ? "..." : "✓ Verifikasi"}
+                        </button>
+                      )}
+                      <button onClick={() => deleteExpense(exp.id)}
+                        style={{ background: "transparent", border: "none", color: COLORS.textMuted, fontSize: 10, cursor: "pointer" }}>hapus</button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -6913,6 +7030,23 @@ END $$;`;
                   </button>
                   <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6 }}>
                     Format 8 kolom Jurnal.id · 1 settlement = 1 TransactionNumber · Balanced per transaksi
+                  </div>
+                </div>
+
+                {/* Purchase Journal */}
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 12, border: "1px solid #f59e0b40" }}>
+                  <div style={{ fontWeight: 600, color: "#fbbf24", marginBottom: 4, fontSize: 12 }}>🛒 Jurnal Pembelian</div>
+                  <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>
+                    Dr. 1-10402 Prepaid (DP vendor)<br/>
+                    Dr. 1-10200 Inventory (barang masuk)<br/>
+                    → Cr. 1-10002-2 BCA · Cr. 1-10201 Raw Material · Cr. 1-10402 Prepaid
+                  </div>
+                  <button onClick={exportPurchaseJournalCSV}
+                    style={{ ...s.btn("primary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700 }}>
+                    🛒 Export Purchase Journal Entry (.csv)
+                  </button>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6 }}>
+                    Format 8 kolom Jurnal.id · DP + Pelunasan + Inventory In · Balanced per reference
                   </div>
                 </div>
 
