@@ -767,6 +767,11 @@ function PlaiInventory() {
     return [];
   };
 
+  // ── Production transaction helpers (used in masuk + laporan pages) ──
+  const isFlowATx = (t) => t.tipe === "masuk" && /PROD-\d{8}-\d{4}/.test(t.catatan || "");
+  const isFlowBTx = (t) => t.tipe === "masuk" && (t.catatan || "").startsWith("White label dari");
+  const isProductionTx = (t) => isFlowATx(t) || isFlowBTx(t);
+
   // Bluetooth/USB scanner handler — detects rapid keystrokes as scanner input
   useEffect(() => {
     const handleKeyPress = (e) => {
@@ -1107,6 +1112,7 @@ function PlaiInventory() {
   const [returQty, setReturQty] = useState(1);
   const [returAlasan, setReturAlasan] = useState("Cacat produk");
   const [returTanggal, setReturTanggal] = useState(new Date().toISOString().split("T")[0]);
+  const [returMasukConfirm, setReturMasukConfirm] = useState(null); // transaksi masuk produksi yang mau diretur
 
   const handleDeleteTx = (tx) => {
     // Revert stock
@@ -1269,6 +1275,87 @@ function PlaiInventory() {
 
     setReturConfirm(null);
     showToast(`✓ Retur ${txAsli.nama} x${qtyRetur} berhasil dicatat — stok +${qtyRetur}, COGS reversed`);
+  };
+
+  const handleReturMasuk = (tx) => {
+    const today = new Date().toISOString().split("T")[0];
+    const dateStr = today.replace(/-/g, "");
+    const ts = Date.now();
+
+    // a. Find linked production order from catatan: "Produksi vendor [PROD-20260321-1234] HPP@..."
+    const refMatch = (tx.catatan || "").match(/PROD-\d{8}-\d{4}/);
+    const prodRef = refMatch ? refMatch[0] : null;
+    const po = prodRef ? productionOrders.find(p => p.reference === prodRef) : null;
+
+    // b. Reverse raw material consumption
+    let materialReversals = [];
+    if (po) {
+      const poMovements = rawMaterialMovements.filter(m => m.reference === prodRef && m.tipe === "keluar");
+      const reversalRef = "RETUR-" + prodRef;
+      poMovements.forEach((m, idx) => {
+        const mQty = m.qty || 0;
+        // Return stok to raw material
+        setRawMaterials(prev => prev.map(rm =>
+          rm.material_sku === m.material_sku ? { ...rm, stok_qty: (rm.stok_qty || 0) + mQty } : rm
+        ));
+        if (sbClient) {
+          const rm = rawMaterials.find(r => r.material_sku === m.material_sku);
+          const newStok = (rm?.stok_qty || 0) + mQty;
+          sbClient.from('raw_materials').update({ stok_qty: newStok }).eq('material_sku', m.material_sku);
+        }
+        // Insert reversal movement
+        materialReversals.push({
+          id: ts + 100 + idx, date: today, material_sku: m.material_sku, tipe: "masuk",
+          qty: mQty, hpp_per_unit: m.hpp_per_unit || 0, total_value: mQty * (m.hpp_per_unit || 0),
+          reference: reversalRef, catatan: "Reversal: " + prodRef, tags: m.tags || ""
+        });
+      });
+      setRawMaterialMovements(prev => [...materialReversals, ...prev]);
+      if (sbClient && materialReversals.length > 0) sbClient.from('raw_material_movements').insert(materialReversals);
+    }
+
+    // c. Reduce finished goods stok
+    const item = inventory.find(i => i.sku === tx.sku);
+    const newStok = Math.max(0, (item?.stok || 0) - tx.jumlah);
+    setInventory(prev => prev.map(i => i.sku === tx.sku ? { ...i, stok: newStok } : i));
+    sbUpsertInventory(tx.sku, newStok);
+
+    // d. Insert retur_masuk transaction
+    const returTx = {
+      id: ts, tanggal: today, sku: tx.sku, nama: tx.nama,
+      tipe: "retur_masuk", jumlah: tx.jumlah, channel: "-", shipping: "none", shippingCost: 0,
+      catatan: `Retur produksi: ${prodRef || "manual"}`, staff: tx.staff || STAFF_LIST[0],
+      harga: tx.harga || 0, reference_id: tx.id
+    };
+    setTransactions(prev => [returTx, ...prev]);
+    sbInsertTx(returTx);
+
+    // e. Update production order status
+    if (po) {
+      setProductionOrders(prev => prev.map(p => p.id === po.id ? { ...p, status: "reversed" } : p));
+      if (sbClient) sbClient.from('production_orders').update({ status: "reversed" }).eq('id', po.id);
+    }
+
+    // f. Generate journal reversal entries (flip debit/credit)
+    if (po) {
+      const origJournals = journalEntries.filter(je => je.reference === prodRef && je.journal_type === "PRODUCTION");
+      const reversalRef = "RETUR-" + prodRef;
+      const reversalEntries = origJournals.map((je, idx) => ({
+        id: ts + 300 + idx, date: today, reference: reversalRef, journal_type: "PRODUCTION_REVERSAL",
+        debit_account: je.credit_account || "", credit_account: je.debit_account || "",
+        amount: je.amount, description: "Reversal: " + (je.description || ""),
+        source_sku: je.source_sku, source_id: String(ts), period_label: today.substring(0, 7),
+        memo: "Production reversal", tags: (je.tags || "") + "; Reversal"
+      }));
+      setJournalEntries(prev => [...reversalEntries, ...prev]);
+      if (sbClient) sbClient.from('journal_entries').insert(reversalEntries)
+        .then(({ error }) => { if (error) console.error('Production reversal journal error:', error); });
+    }
+
+    // g. Toast + reset
+    const matCount = materialReversals.length;
+    showToast(`↩ Retur produksi ${tx.nama} x${tx.jumlah} selesai.${matCount > 0 ? ` ${matCount} material dikembalikan.` : ""} Stok baju -${tx.jumlah}. Journal reversal di-generate.`);
+    setReturMasukConfirm(null);
   };
 
   // ── handlers ────────────────────────────────────────────────────────────────
@@ -3788,8 +3875,17 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
               {transactions.filter(t => t.tipe === "masuk").slice(0, 8).map(t => (
                 <tr key={t.id}><td style={s.td}>{t.tanggal}</td><td style={s.td}><span style={s.skuBadge}>{t.sku}</span></td><td style={s.td}>{t.nama}</td><td style={{ ...s.td, color: COLORS.success, fontWeight: 600 }}>+{t.jumlah}</td><td style={s.td}>{t.staff}</td>
                 <td style={{ ...s.td, whiteSpace: "nowrap" }}>
-                  <button onClick={() => { setEditingTx({...t}); setPage("laporan"); }} style={{ background: COLORS.aqua+"30", color: COLORS.aqua, border: `1px solid ${COLORS.aqua}50`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer", marginRight: 3 }}>Edit</button>
-                  <button onClick={() => setDeleteTxConfirm(t)} style={{ background: COLORS.danger+"20", color: COLORS.danger, border: `1px solid ${COLORS.danger}40`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer" }}>Hapus</button>
+                  {isProductionTx(t) ? (
+                    <>
+                      <span style={{ fontSize: 9, color: COLORS.textMuted, cursor: "not-allowed", marginRight: 4 }} title="Tidak bisa diedit — gunakan Retur untuk koreksi">🔒</span>
+                      {isFlowATx(t) && <button onClick={() => setReturMasukConfirm(t)} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer" }}>↩ Retur</button>}
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => { setEditingTx({...t}); setPage("laporan"); }} style={{ background: COLORS.aqua+"30", color: COLORS.aqua, border: `1px solid ${COLORS.aqua}50`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer", marginRight: 3 }}>Edit</button>
+                      <button onClick={() => setDeleteTxConfirm(t)} style={{ background: COLORS.danger+"20", color: COLORS.danger, border: `1px solid ${COLORS.danger}40`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer" }}>Hapus</button>
+                    </>
+                  )}
                 </td></tr>
               ))}
             </tbody>
@@ -4815,9 +4911,18 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                       <td style={{ ...s.td, fontSize: 11 }}>{t.staff}</td>
                       <td style={{ ...s.td, fontSize: 10, color: t.invoiceId ? COLORS.aqua : COLORS.textMuted, maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.invoiceId ? t.invoiceId.replace("INV-", "#") : "-"}</td>
                       <td style={{ ...s.td, whiteSpace: "nowrap" }}>
-                        <button onClick={() => setEditingTx({...t})} style={{ background: COLORS.aqua+"30", color: COLORS.aqua, border: `1px solid ${COLORS.aqua}50`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, marginRight: 4 }}>Edit</button>
-                        {t.tipe === "keluar" && <button onClick={() => { const maxQ = t.jumlah - transactions.filter(r => r.tipe === "retur" && r.reference_id === t.id).reduce((s,r) => s + r.jumlah, 0); setReturQty(maxQ > 0 ? maxQ : 1); setReturAlasan("Cacat produk"); setReturTanggal(new Date().toISOString().split("T")[0]); setReturConfirm(t); }} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, marginRight: 4 }}>↩ Retur</button>}
-                        <button onClick={() => setDeleteTxConfirm(t)} style={{ background: COLORS.danger+"20", color: COLORS.danger, border: `1px solid ${COLORS.danger}40`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>Hapus</button>
+                        {isProductionTx(t) ? (
+                          <>
+                            <span style={{ fontSize: 9, color: COLORS.textMuted, cursor: "not-allowed", marginRight: 4 }} title="Tidak bisa diedit — gunakan Retur untuk koreksi">🔒</span>
+                            {isFlowATx(t) && <button onClick={() => setReturMasukConfirm(t)} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>↩ Retur</button>}
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => setEditingTx({...t})} style={{ background: COLORS.aqua+"30", color: COLORS.aqua, border: `1px solid ${COLORS.aqua}50`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, marginRight: 4 }}>Edit</button>
+                            {t.tipe === "keluar" && <button onClick={() => { const maxQ = t.jumlah - transactions.filter(r => r.tipe === "retur" && r.reference_id === t.id).reduce((s,r) => s + r.jumlah, 0); setReturQty(maxQ > 0 ? maxQ : 1); setReturAlasan("Cacat produk"); setReturTanggal(new Date().toISOString().split("T")[0]); setReturConfirm(t); }} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, marginRight: 4 }}>↩ Retur</button>}
+                            <button onClick={() => setDeleteTxConfirm(t)} style={{ background: COLORS.danger+"20", color: COLORS.danger, border: `1px solid ${COLORS.danger}40`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>Hapus</button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -4935,6 +5040,80 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                       <button onClick={() => setReturConfirm(null)} style={{ ...s.btn("secondary"), flex: 1 }}>Tutup</button>
                     </div>
                   )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Retur Masuk (Production) Modal */}
+          {returMasukConfirm && (() => {
+            const rmc = returMasukConfirm;
+            const refMatch = (rmc.catatan || "").match(/PROD-\d{8}-\d{4}/);
+            const prodRef = refMatch ? refMatch[0] : null;
+            const po = prodRef ? productionOrders.find(p => p.reference === prodRef) : null;
+            const poMovements = prodRef ? rawMaterialMovements.filter(m => m.reference === prodRef && m.tipe === "keluar") : [];
+            return (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setReturMasukConfirm(null)}>
+                <div style={{ background: COLORS.brown, borderRadius: 14, padding: 24, width: 480, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 8px 40px rgba(0,0,0,0.5)" }} onClick={e => e.stopPropagation()}>
+                  <div style={{ fontWeight: 700, color: COLORS.warning, fontSize: 16, marginBottom: 12 }}>↩ Retur Produksi</div>
+
+                  {/* Info transaksi */}
+                  <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.cream, marginBottom: 4 }}>{rmc.nama}</div>
+                    <div style={{ fontSize: 12, color: COLORS.textMuted }}>{rmc.tanggal} · {rmc.jumlah} pcs · Ref: <span style={{ fontFamily: "monospace", color: COLORS.aqua }}>{prodRef || "-"}</span></div>
+                  </div>
+
+                  {/* Production order info */}
+                  {po ? (
+                    <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.cream, marginBottom: 6 }}>Production Order</div>
+                      <div style={{ fontSize: 11, color: COLORS.textMuted }}>
+                        Vendor: <span style={{ color: COLORS.cream }}>{po.vendor}</span> · Total Cost: <span style={{ color: COLORS.cream }}>Rp {(po.total_cost||0).toLocaleString("id-ID")}</span> · HPP/pcs: <span style={{ color: COLORS.success, fontWeight: 700 }}>Rp {(po.hpp_per_unit||0).toLocaleString("id-ID")}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ background: COLORS.danger+"15", border: `1px solid ${COLORS.danger}40`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.danger, marginBottom: 4 }}>⚠ Production order tidak ditemukan</div>
+                      <div style={{ fontSize: 11, color: COLORS.textMuted }}>Retur tidak bisa dilakukan otomatis. Lakukan koreksi manual di Jurnal.id.</div>
+                    </div>
+                  )}
+
+                  {/* Material yang akan dikembalikan */}
+                  {poMovements.length > 0 && (
+                    <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.cream, marginBottom: 8 }}>Material yang akan dikembalikan:</div>
+                      {poMovements.map((m, i) => {
+                        const rm = rawMaterials.find(r => r.material_sku === m.material_sku);
+                        return (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: COLORS.textMuted, padding: "3px 0" }}>
+                            <span>{rm?.nama || m.material_sku}</span>
+                            <span><span style={{ color: COLORS.success, fontWeight: 600 }}>+{m.qty} {rm?.satuan || "pcs"}</span> · stok: {rm?.stok_qty || 0}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Preview */}
+                  <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, marginBottom: 16, border: `1px solid ${COLORS.warning}30` }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.warning, marginBottom: 6 }}>Yang akan terjadi:</div>
+                    <div style={{ fontSize: 12, color: COLORS.cream, lineHeight: 1.8 }}>
+                      <div>• Stok {rmc.nama} <span style={{ color: COLORS.danger, fontWeight: 700 }}>-{rmc.jumlah}</span> pcs</div>
+                      {poMovements.length > 0 && <div>• {poMovements.length} material dikembalikan ke stok bahan baku</div>}
+                      {po && <div>• Production order <span style={{ color: COLORS.warning }}>"{prodRef}"</span> → status <strong>reversed</strong></div>}
+                      <div>• Journal reversal entries di-generate</div>
+                    </div>
+                  </div>
+
+                  {/* Buttons */}
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {po ? (
+                      <button onClick={() => handleReturMasuk(rmc)} style={{ ...s.btn("warning"), flex: 1, color: COLORS.brownDark }}>Konfirmasi Retur Produksi</button>
+                    ) : (
+                      <button disabled style={{ ...s.btn("secondary"), flex: 1, opacity: 0.5, cursor: "not-allowed" }}>Retur tidak tersedia</button>
+                    )}
+                    <button onClick={() => setReturMasukConfirm(null)} style={{ ...s.btn("secondary"), flex: 1 }}>Batal</button>
+                  </div>
                 </div>
               </div>
             );
