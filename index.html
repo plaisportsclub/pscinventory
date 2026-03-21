@@ -75,6 +75,7 @@ const navItems = [
   { id: "data", label: "Import Data", icon: "⬆" },
   { id: "kasir", label: "Kasir", icon: "🛒" },
   { id: "keuangan", label: "Keuangan", icon: "💰" },
+  { id: "settlement", label: "Settlement", icon: "🏦" },
   { id: "ai", label: "Tanya AI", icon: "✦" },
   { id: "settings", label: "Pengaturan", icon: "⚙" },
 ];
@@ -656,6 +657,18 @@ function PlaiInventory() {
   const [editingExpense, setEditingExpense] = useState(null);
   const [editingIncome, setEditingIncome] = useState(null);
 
+  // ── Settlement Marketplace state ──
+  const [settlements, setSettlements] = useState([]);
+  const [settlementPlatform, setSettlementPlatform] = useState("semua");
+  const [settlementPeriod, setSettlementPeriod] = useState("");
+  const [showSettlementForm, setShowSettlementForm] = useState(false);
+  const [settlementForm, setSettlementForm] = useState({
+    platform: "shopee",
+    tanggal: new Date().toISOString().split("T")[0],
+    amount_received: "",
+    catatan: ""
+  });
+
   // Camera Scanner Component
   const CameraScanner = ({ onScan, onClose }) => {
     const videoRef = useRef(null);
@@ -900,7 +913,7 @@ function PlaiInventory() {
     const loadAll = async () => {
       setSbSyncing(true);
       try {
-        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }, { data: expData, error: e5 }, { data: incData, error: e6 }, { data: jeData, error: e7 }, { data: rmData, error: e8 }, { data: bomData, error: e9 }, { data: poData, error: e10 }, { data: rmmData, error: e11 }, { data: purchData, error: e12 }] = await Promise.all([
+        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }, { data: expData, error: e5 }, { data: incData, error: e6 }, { data: jeData, error: e7 }, { data: rmData, error: e8 }, { data: bomData, error: e9 }, { data: poData, error: e10 }, { data: rmmData, error: e11 }, { data: purchData, error: e12 }, { data: settlData, error: e13 }] = await Promise.all([
           sbClient.from('inventory').select('*'),
           sbClient.from('transactions').select('*').order('id', { ascending: false }),
           sbClient.from('pinjaman').select('*').order('id', { ascending: false }),
@@ -913,6 +926,7 @@ function PlaiInventory() {
           sbClient.from('production_orders').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
           sbClient.from('raw_material_movements').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
           sbClient.from('purchases').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('marketplace_settlements').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
         ]);
         if (e1 || e2 || e3) throw new Error((e1 || e2 || e3).message);
         if (inv && inv.length > 0) setInventory(inv);
@@ -931,6 +945,7 @@ function PlaiInventory() {
         if (poData) setProductionOrders(poData);
         if (rmmData) setRawMaterialMovements(rmmData);
         if (purchData) setPurchases(purchData);
+        if (settlData) setSettlements(settlData);
         setSbConnected(true);
         showToast('✓ Terhubung ke database!', 'success');
       } catch(e) {
@@ -981,6 +996,10 @@ function PlaiInventory() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'purchases' }, async () => {
         const { data } = await sbClient.from('purchases').select('*').order('id', { ascending: false });
         if (data) setPurchases(data);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'marketplace_settlements' }, async () => {
+        const { data } = await sbClient.from('marketplace_settlements').select('*').order('id', { ascending: false });
+        if (data) setSettlements(data);
       })
       .subscribe();
     return () => sbClient.removeChannel(ch);
@@ -2466,6 +2485,131 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     showToast("Pemasukan dihapus", "warning");
   };
 
+  // ── handleSettlement: proses settlement marketplace ──
+  const handleSettlement = async () => {
+    const { platform, tanggal, amount_received, catatan } = settlementForm;
+    if (!platform || !tanggal || !amount_received) {
+      showToast("Isi platform, tanggal, dan jumlah diterima!", "danger"); return;
+    }
+    const amtReceived = parseRp(amount_received);
+    if (amtReceived <= 0) { showToast("Jumlah diterima harus > 0!", "danger"); return; }
+
+    // Tag mapping per platform
+    const platformTagMap = { shopee: "Shopee", tokopedia: "Tokped", tiktok: "TikTok" };
+    const platformTag = platformTagMap[platform] || platform;
+    const periodLabel = tanggal.substring(0, 7);
+
+    // Filter pending incomes for this platform & period
+    const pendingIncomes = incomes.filter(i =>
+      i.pending_settlement === true &&
+      (i.tags || "").includes(platformTag) &&
+      (i.date || "").substring(0, 7) === periodLabel
+    );
+    const amtExpected = pendingIncomes.reduce((s, i) => s + (i.amount || 0), 0);
+
+    // Guard: no pending incomes
+    if (pendingIncomes.length === 0) {
+      showToast(`Tidak ada A/R pending untuk ${platformTag} periode ${periodLabel}. Pastikan transaksi marketplace sudah dicatat di Barang Terjual.`, "warning");
+      return;
+    }
+
+    const difference = amtReceived - amtExpected;
+
+    // Generate reference
+    const ts = Date.now();
+    const ym = tanggal.replace(/-/g, "").substring(0, 6);
+    const reference = `STLMT-${platform}-${ym}-${String(ts).slice(-4)}`;
+
+    // Build journal entries
+    const journalRows = [];
+    // Dr. BCA (amount received)
+    journalRows.push({
+      id: ts + 20, date: tanggal, reference, journal_type: "SETTLEMENT",
+      debit_account: "1-10002-2", credit_account: "",
+      amount: amtReceived,
+      description: `Settlement ${platformTag} ${periodLabel}`,
+      source_id: String(ts), source_sku: "",
+      period_label: periodLabel,
+      memo: `Settlement ${platformTag}`, tags: `${platformTag}; Settlement`
+    });
+    // Cr. A/R (amount expected)
+    journalRows.push({
+      id: ts + 21, date: tanggal, reference, journal_type: "SETTLEMENT",
+      debit_account: "", credit_account: "1-10100",
+      amount: amtExpected,
+      description: `Settlement ${platformTag} ${periodLabel}`,
+      source_id: String(ts), source_sku: "",
+      period_label: periodLabel,
+      memo: `Settlement ${platformTag}`, tags: `${platformTag}; A/R Settlement`
+    });
+    // Selisih
+    if (difference > 0) {
+      journalRows.push({
+        id: ts + 22, date: tanggal, reference, journal_type: "SETTLEMENT",
+        debit_account: "", credit_account: "8-80999",
+        amount: difference,
+        description: `Selisih settlement ${platformTag} (lebih)`,
+        source_id: String(ts), source_sku: "",
+        period_label: periodLabel,
+        memo: `Settlement ${platformTag}`, tags: `${platformTag}; Selisih`
+      });
+    } else if (difference < 0) {
+      journalRows.push({
+        id: ts + 22, date: tanggal, reference, journal_type: "SETTLEMENT",
+        debit_account: "8-80999", credit_account: "",
+        amount: Math.abs(difference),
+        description: `Selisih settlement ${platformTag} (kurang)`,
+        source_id: String(ts), source_sku: "",
+        period_label: periodLabel,
+        memo: `Settlement ${platformTag}`, tags: `${platformTag}; Selisih`
+      });
+    }
+
+    // Update incomes: pending_settlement → false
+    const updatedIncomes = incomes.map(i =>
+      pendingIncomes.find(p => p.id === i.id)
+        ? { ...i, pending_settlement: false }
+        : i
+    );
+    setIncomes(updatedIncomes);
+
+    // Insert settlement record
+    const settlRec = {
+      id: ts, date: tanggal, reference, platform,
+      amount_expected: amtExpected, amount_received: amtReceived,
+      status: "settled", catatan: catatan || null,
+      period_label: periodLabel, created_at: new Date().toISOString()
+    };
+    setSettlements(prev => [settlRec, ...prev]);
+
+    // Insert journal entries to state
+    setJournalEntries(prev => [...journalRows, ...prev]);
+
+    // Supabase: update incomes, insert settlement, insert journals
+    if (sbClient) {
+      try {
+        const pendingIds = pendingIncomes.map(i => i.id);
+        if (pendingIds.length > 0) {
+          await sbClient.from('incomes').update({ pending_settlement: false }).in('id', pendingIds);
+        }
+        await sbClient.from('marketplace_settlements').insert(settlRec);
+        await sbClient.from('journal_entries').insert(journalRows);
+      } catch(e) { console.error('Settlement DB error:', e); }
+    }
+
+    // Toast
+    if (difference === 0) {
+      showToast(`✓ Settlement ${platformTag} Rp ${amtReceived.toLocaleString("id-ID")} — pas, tidak ada selisih`);
+    } else {
+      const selisihLabel = difference > 0 ? "lebih" : "kurang";
+      showToast(`✓ Settlement ${platformTag} Rp ${amtReceived.toLocaleString("id-ID")} diterima. Expected Rp ${amtExpected.toLocaleString("id-ID")}. Selisih: Rp ${Math.abs(difference).toLocaleString("id-ID")} ${selisihLabel}`);
+    }
+
+    // Reset form
+    setSettlementForm({ platform: "shopee", tanggal: new Date().toISOString().split("T")[0], amount_received: "", catatan: "" });
+    setShowSettlementForm(false);
+  };
+
   const filterByPeriod = (items, period) => {
     const now = new Date();
     const today = now.toISOString().split("T")[0];
@@ -2849,6 +2993,52 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const totalDebit = prodEntries.filter(e => e.debit_account === "1-10200").reduce((s, e) => s + (e.amount || 0), 0);
     const refCount = Object.keys(byRef).length - skippedRefs.length;
     showToast(`✓ Production CSV: ${refCount} production orders · Total Rp ${totalDebit.toLocaleString("id-ID")} — siap upload ke Jurnal.id`);
+  };
+
+  // ── Export Settlement Journal Entry CSV for Jurnal.id ──
+  const exportSettlementJournalCSV = () => {
+    const settlEntries = filterByPeriod(
+      journalEntries.filter(je => je.journal_type === "SETTLEMENT"),
+      keuanganPeriod
+    );
+    if (settlEntries.length === 0) {
+      showToast("⚠ Tidak ada Settlement journal entries di periode ini.", "warning");
+      return;
+    }
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const p = String(d).split("-");
+      return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : d;
+    };
+    // Group by reference
+    const byRef = {};
+    settlEntries.forEach(je => {
+      if (!byRef[je.reference]) byRef[je.reference] = [];
+      byRef[je.reference].push(je);
+    });
+    const header = "*TransactionNumber,*TransactionDate,*AccountCode,Description,*Debit,*Credit,Memo,Tags";
+    const rows = [];
+    Object.entries(byRef).forEach(([ref, entries]) => {
+      entries.forEach(je => {
+        const acct = je.debit_account || je.credit_account || "";
+        const debit = je.debit_account ? (je.amount || 0) : "";
+        const credit = je.credit_account ? (je.amount || 0) : "";
+        rows.push([ref, fmtDate(je.date), acct, je.description || "", debit, credit, je.memo || "", je.tags || ""]);
+      });
+    });
+    const csvLines = [header, ...rows.map(r => r.map(c => {
+      const v = String(c ?? "");
+      return v.includes(",") || v.includes('"') || v.includes("\n") ? `"${v.replace(/"/g, '""')}"` : v;
+    }).join(","))];
+    const csv = csvLines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Plai_SettlementJournalEntry_${getPeriodLabel()}_${getDateStr()}.csv`;
+    a.click();
+    const refCount = Object.keys(byRef).length;
+    const totalReceived = settlEntries.filter(e => e.debit_account === "1-10002-2").reduce((s, e) => s + (e.amount || 0), 0);
+    showToast(`✓ Settlement CSV: ${refCount} settlement · Total diterima Rp ${totalReceived.toLocaleString("id-ID")} — siap upload ke Jurnal.id`);
   };
 
   // ── Export Semua: all 5 sheets in one Excel ──
@@ -6709,6 +6899,23 @@ END $$;`;
                   </div>
                 </div>
 
+                {/* Settlement Journal */}
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${COLORS.success}40` }}>
+                  <div style={{ fontWeight: 600, color: COLORS.success, marginBottom: 4, fontSize: 12 }}>🏦 Jurnal Settlement Marketplace</div>
+                  <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>
+                    Dr. 1-10002-2 BCA (diterima)<br/>
+                    → Cr. 1-10100 A/R Marketplace (expected)<br/>
+                    → Dr/Cr. 8-80999 Selisih (kalau ada)
+                  </div>
+                  <button onClick={exportSettlementJournalCSV}
+                    style={{ ...s.btn("primary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700 }}>
+                    🏦 Export Settlement Journal Entry (.csv)
+                  </button>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6 }}>
+                    Format 8 kolom Jurnal.id · 1 settlement = 1 TransactionNumber · Balanced per transaksi
+                  </div>
+                </div>
+
                 {/* Export Semua */}
                 <button onClick={exportKeuanganExcel}
                   style={{ ...s.btn("primary"), width: "100%", padding: "12px 0", fontSize: 14, fontWeight: 800 }}>
@@ -6807,6 +7014,210 @@ WHERE tags IS NULL;`}
         </div>
       );
     },
+
+    settlement: () => {
+      const platformTagMap = { shopee: "Shopee", tokopedia: "Tokped", tiktok: "TikTok" };
+      // Filter settlements by platform + period
+      const filteredSettlements = settlements.filter(st => {
+        if (settlementPlatform !== "semua" && st.platform !== settlementPlatform) return false;
+        if (settlementPeriod && st.period_label !== settlementPeriod) return false;
+        return true;
+      });
+      // Pending incomes (for summary cards)
+      const pendingInc = incomes.filter(i => {
+        if (!i.pending_settlement) return false;
+        if (settlementPlatform !== "semua") {
+          const tag = platformTagMap[settlementPlatform] || "";
+          if (!(i.tags || "").includes(tag)) return false;
+        }
+        if (settlementPeriod && (i.date || "").substring(0, 7) !== settlementPeriod) return false;
+        return true;
+      });
+      const arOutstanding = pendingInc.reduce((s, i) => s + (i.amount || 0), 0);
+      const settledTotal = filteredSettlements.reduce((s, st) => s + (st.amount_received || 0), 0);
+      const pendingCount = pendingInc.length;
+      // Unique period labels for dropdown
+      const allPeriods = [...new Set([
+        ...incomes.filter(i => i.date).map(i => (i.date || "").substring(0, 7)),
+        ...settlements.filter(st => st.period_label).map(st => st.period_label)
+      ])].sort().reverse();
+      // Preview calc for form
+      const formPlatformTag = platformTagMap[settlementForm.platform] || settlementForm.platform;
+      const formPeriod = settlementForm.tanggal ? settlementForm.tanggal.substring(0, 7) : "";
+      const formPending = incomes.filter(i =>
+        i.pending_settlement === true &&
+        (i.tags || "").includes(formPlatformTag) &&
+        (i.date || "").substring(0, 7) === formPeriod
+      );
+      const formExpected = formPending.reduce((s, i) => s + (i.amount || 0), 0);
+      const formReceived = parseRp(settlementForm.amount_received) || 0;
+      const formDiff = formReceived - formExpected;
+
+      return (
+        <div style={{ maxWidth: 700, margin: "0 auto" }}>
+          <div style={s.cardTitle}>🏦 Settlement Marketplace</div>
+
+          {/* SECTION A — Filter bar */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>Platform</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              {[["semua","Semua"],["shopee","🟠 Shopee"],["tokopedia","🟢 Tokped"],["tiktok","🎵 TikTok"]].map(([val, lbl]) => (
+                <button key={val} onClick={() => setSettlementPlatform(val)}
+                  style={{ padding: "6px 14px", background: settlementPlatform === val ? COLORS.aqua : "transparent",
+                    color: settlementPlatform === val ? COLORS.brownDark : COLORS.textMuted,
+                    border: `1px solid ${settlementPlatform === val ? COLORS.aqua : COLORS.brownLight}`,
+                    borderRadius: 20, fontSize: 12, fontWeight: settlementPlatform === val ? 700 : 400, cursor: "pointer" }}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>Periode</div>
+            <select style={{ ...s.select, maxWidth: 200 }} value={settlementPeriod} onChange={e => setSettlementPeriod(e.target.value)}>
+              <option value="">Semua Periode</option>
+              {allPeriods.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+
+          {/* SECTION B — Summary cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 20 }}>
+            <div style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, textAlign: "center", border: `1px solid ${arOutstanding > 0 ? COLORS.warning : COLORS.success}40` }}>
+              <div style={{ fontSize: 11, color: COLORS.textMuted }}>A/R Belum Settled</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: arOutstanding > 0 ? COLORS.warning : COLORS.success, marginTop: 4 }}>
+                {fmt(arOutstanding)}
+              </div>
+            </div>
+            <div style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, textAlign: "center", border: `1px solid ${COLORS.success}40` }}>
+              <div style={{ fontSize: 11, color: COLORS.textMuted }}>Sudah Settled</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.success, marginTop: 4 }}>
+                {fmt(settledTotal)}
+              </div>
+            </div>
+            <div style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, textAlign: "center", border: `1px solid ${COLORS.aqua}40` }}>
+              <div style={{ fontSize: 11, color: COLORS.textMuted }}>Transaksi Pending</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.aqua, marginTop: 4 }}>
+                {pendingCount}
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION C — Form Input Settlement */}
+          <div style={{ marginBottom: 20 }}>
+            {!showSettlementForm ? (
+              <button onClick={() => setShowSettlementForm(true)}
+                style={{ ...s.btn("primary"), width: "100%", padding: "11px 0", fontWeight: 700 }}>
+                + Input Settlement
+              </button>
+            ) : (
+              <div style={s.card}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.cream, marginBottom: 12 }}>Input Settlement Baru</div>
+                <div style={s.formGroup}>
+                  <label style={s.label}>Platform</label>
+                  <select style={s.select} value={settlementForm.platform}
+                    onChange={e => setSettlementForm(p => ({ ...p, platform: e.target.value }))}>
+                    <option value="shopee">🟠 Shopee</option>
+                    <option value="tokopedia">🟢 Tokopedia</option>
+                    <option value="tiktok">🎵 TikTok</option>
+                  </select>
+                </div>
+                <div style={s.formGroup}>
+                  <label style={s.label}>Tanggal Settlement</label>
+                  <input style={s.input} type="date" value={settlementForm.tanggal}
+                    onChange={e => setSettlementForm(p => ({ ...p, tanggal: e.target.value }))} />
+                </div>
+                <div style={s.formGroup}>
+                  <label style={s.label}>Jumlah Diterima (Rp)</label>
+                  <input style={s.input} type="number" min="0" placeholder="cth: 1500000"
+                    value={settlementForm.amount_received}
+                    onChange={e => setSettlementForm(p => ({ ...p, amount_received: e.target.value }))} />
+                </div>
+                <div style={s.formGroup}>
+                  <label style={s.label}>Catatan <span style={{ color: COLORS.textMuted, fontWeight: 400 }}>(opsional)</span></label>
+                  <input style={s.input} type="text" placeholder="cth: Transfer batch minggu ke-3"
+                    value={settlementForm.catatan}
+                    onChange={e => setSettlementForm(p => ({ ...p, catatan: e.target.value }))} />
+                </div>
+
+                {/* Preview box */}
+                {formPeriod && (
+                  <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${COLORS.brownLight}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: COLORS.aqua, marginBottom: 8 }}>Preview Settlement</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: COLORS.cream, marginBottom: 4 }}>
+                      <span>A/R Expected ({formPending.length} transaksi)</span>
+                      <span style={{ fontWeight: 700 }}>{fmt(formExpected)}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: COLORS.cream, marginBottom: 6 }}>
+                      <span>Jumlah Diterima</span>
+                      <span style={{ fontWeight: 700 }}>{fmt(formReceived)}</span>
+                    </div>
+                    <div style={{ borderTop: `1px solid ${COLORS.brownLight}`, paddingTop: 6, display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                      <span style={{ color: COLORS.cream }}>Selisih</span>
+                      <span style={{ fontWeight: 800,
+                        color: formReceived === 0 ? COLORS.textMuted : formDiff === 0 ? COLORS.success : formDiff > 0 ? COLORS.warning : COLORS.danger }}>
+                        {formReceived === 0 ? "-" : formDiff === 0 ? "Rp 0 (Pas)" : `${formDiff > 0 ? "+" : ""}${fmt(formDiff)} ${formDiff > 0 ? "(lebih)" : "(kurang)"}`}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={handleSettlement}
+                    style={{ ...s.btn("primary"), flex: 1, padding: "11px 0", fontWeight: 700 }}>
+                    ✓ Konfirmasi Settlement
+                  </button>
+                  <button onClick={() => setShowSettlementForm(false)}
+                    style={{ ...s.btn("secondary"), padding: "11px 16px" }}>
+                    Batal
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SECTION D — Tabel Riwayat Settlement */}
+          <div style={s.card}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.cream, marginBottom: 12 }}>Riwayat Settlement</div>
+            {filteredSettlements.length === 0 ? (
+              <div style={{ textAlign: "center", color: COLORS.textMuted, padding: "24px 12px", fontSize: 13 }}>
+                Belum ada settlement. Klik '+ Input Settlement' untuk mencatat pembayaran masuk dari marketplace.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${COLORS.brownLight}` }}>
+                      {["Tanggal", "Platform", "Expected", "Diterima", "Selisih", "Catatan"].map(h => (
+                        <th key={h} style={{ padding: "8px 6px", textAlign: "left", color: COLORS.textMuted, fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSettlements.map(st => {
+                      const diff = (st.amount_received || 0) - (st.amount_expected || 0);
+                      return (
+                        <tr key={st.id} style={{ borderBottom: `1px solid ${COLORS.brownLight}30` }}>
+                          <td style={{ padding: "8px 6px", color: COLORS.cream, whiteSpace: "nowrap" }}>{st.date}</td>
+                          <td style={{ padding: "8px 6px", color: COLORS.cream, textTransform: "capitalize" }}>{st.platform}</td>
+                          <td style={{ padding: "8px 6px", color: COLORS.textMuted, whiteSpace: "nowrap" }}>{fmt(st.amount_expected || 0)}</td>
+                          <td style={{ padding: "8px 6px", color: COLORS.cream, fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(st.amount_received || 0)}</td>
+                          <td style={{ padding: "8px 6px", whiteSpace: "nowrap" }}>
+                            <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600,
+                              background: diff === 0 ? COLORS.success+"30" : diff > 0 ? COLORS.aqua+"30" : COLORS.danger+"30",
+                              color: diff === 0 ? COLORS.success : diff > 0 ? COLORS.aqua : COLORS.danger }}>
+                              {diff === 0 ? "Pas" : diff > 0 ? `Lebih ${fmt(diff)}` : `Kurang ${fmt(Math.abs(diff))}`}
+                            </span>
+                          </td>
+                          <td style={{ padding: "8px 6px", color: COLORS.textMuted, fontSize: 11, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{st.catatan || "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    },
   };
 
   const currentPage = pages[page];
@@ -6814,7 +7225,7 @@ WHERE tags IS NULL;`}
     dashboard: "Dashboard", scan: "Quick Scan ⚡", stok: "Cek Stok", masuk: "Barang Masuk", keluar: "Barang Terjual",
     marketing: "KOL & Pinjam 📱", rusak: "Rusak / Hilang", pinjam: "Peminjaman", laporan: "Laporan",
     label: "Cetak Label Barcode", data: "Import Data", ai: "Tanya AI ✦", settings: "Pengaturan ⚙",
-    kasir: "Kasir 🛒", keuangan: "Keuangan 💰"
+    kasir: "Kasir 🛒", keuangan: "Keuangan 💰", settlement: "Settlement 🏦"
   };
 
   return (
