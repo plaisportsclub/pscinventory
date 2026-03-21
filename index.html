@@ -1447,10 +1447,10 @@ function PlaiInventory() {
     const ref = `PROD-${dateStr}-${String(ts).slice(-4)}`;
     const periodLabel = today.substring(0, 7);
 
-    // 3. Update inventory stok + hpp
+    // 3. Update inventory stok + hpp (await)
     const newStok = (item.stok || 0) + qty;
     setInventory(prev => prev.map(i => i.sku === masukProductSku ? { ...i, stok: newStok, hpp: hppPerUnit } : i));
-    sbUpsertInventoryHpp(masukProductSku, newStok, hppPerUnit);
+    await sbUpsertInventoryHpp(masukProductSku, newStok, hppPerUnit);
 
     // 4. Insert transaction (masuk)
     const tx = {
@@ -1461,24 +1461,24 @@ function PlaiInventory() {
       staff: "Sinta"
     };
     setTransactions(prev => [tx, ...prev]);
-    sbInsertTx(tx);
+    await sbInsertTx(tx);
 
-    // 5. Kurangi stok raw materials + 6. Insert raw_material_movements
+    // 5. Kurangi stok raw materials (sequential await per material)
     const rmmRows = [];
     for (const m of masukMaterials) {
       const mQty = parseRp(m.qty) || 0;
       const mHpp = parseRp(m.hpp_per_unit) || 0;
       if (mQty <= 0) continue;
+      const rm = rawMaterials.find(r => r.material_sku === m.material_sku);
+      const newRmStok = Math.max(0, (rm?.stok_qty || 0) - mQty);
       // Update local state
-      setRawMaterials(prev => prev.map(rm =>
-        rm.material_sku === m.material_sku ? { ...rm, stok_qty: Math.max(0, (rm.stok_qty || 0) - mQty) } : rm
+      setRawMaterials(prev => prev.map(r =>
+        r.material_sku === m.material_sku ? { ...r, stok_qty: newRmStok } : r
       ));
-      // Update Supabase raw_materials
+      // Await Supabase update
       if (sbClient) {
-        const rm = rawMaterials.find(r => r.material_sku === m.material_sku);
-        const newRmStok = Math.max(0, (rm?.stok_qty || 0) - mQty);
-        sbClient.from('raw_materials').update({ stok_qty: newRmStok }).eq('material_sku', m.material_sku)
-          .then(({ error }) => { if (error) { console.error('raw_materials update error:', error); showToast('DB error raw_materials: ' + error.message, 'danger'); } });
+        const { error } = await sbClient.from('raw_materials').update({ stok_qty: newRmStok }).eq('material_sku', m.material_sku);
+        if (error) { console.error('raw_materials update error:', error); showToast('DB error raw_materials: ' + error.message, 'danger'); }
       }
       // Build movement record
       rmmRows.push({
@@ -1489,19 +1489,25 @@ function PlaiInventory() {
         tags: m.tags || ""
       });
     }
-    setRawMaterialMovements(prev => [...rmmRows, ...prev]);
-    if (sbClient && rmmRows.length > 0) sbClient.from('raw_material_movements').insert(rmmRows)
-      .then(({ error }) => { if (error) { console.error('raw_material_movements insert error:', error); showToast('DB error movements: ' + error.message, 'danger'); } });
 
-    // 7. Update purchase status
+    // 6. Insert raw_material_movements (await)
+    setRawMaterialMovements(prev => [...rmmRows, ...prev]);
+    if (sbClient && rmmRows.length > 0) {
+      const { error } = await sbClient.from('raw_material_movements').insert(rmmRows);
+      if (error) { console.error('raw_material_movements insert error:', error); showToast('DB error movements: ' + error.message, 'danger'); }
+    }
+
+    // 7. Update purchase status (await)
     if (masukSelectedPurchase) {
       const pid = masukSelectedPurchase.id;
       setPurchases(prev => prev.map(p => p.id === pid ? { ...p, status: "received", qty_received: qty, hpp_per_unit: hppPerUnit } : p));
-      if (sbClient) sbClient.from('purchases').update({ status: "received", qty_received: qty, hpp_per_unit: hppPerUnit }).eq('id', pid)
-        .then(({ error }) => { if (error) { console.error('purchases update error:', error); showToast('DB error purchases: ' + error.message, 'danger'); } });
+      if (sbClient) {
+        const { error } = await sbClient.from('purchases').update({ status: "received", qty_received: qty, hpp_per_unit: hppPerUnit }).eq('id', pid);
+        if (error) { console.error('purchases update error:', error); showToast('DB error purchases: ' + error.message, 'danger'); }
+      }
     }
 
-    // 8. Insert production_order
+    // 8. Insert production_order (await)
     const po = {
       id: ts + 200, date: today, reference: ref,
       product_sku: masukProductSku, product_nama: item.nama,
@@ -1512,13 +1518,14 @@ function PlaiInventory() {
       status: "completed", period_label: periodLabel
     };
     setProductionOrders(prev => [po, ...prev]);
-    if (sbClient) sbClient.from('production_orders').insert([po])
-      .then(({ error }) => { if (error) { console.error('production_orders insert error:', error); showToast('DB error production_orders: ' + error.message, 'danger'); } });
+    if (sbClient) {
+      const { error } = await sbClient.from('production_orders').insert([po]);
+      if (error) { console.error('production_orders insert error:', error); showToast('DB error production_orders: ' + error.message, 'danger'); }
+    }
 
-    // 9. Journal entries
+    // 9. Journal entries (await)
     const journalRows = [];
     let jeIdx = 0;
-    // Debit: Dr. 1-10200 Inventory Finished Products
     journalRows.push({
       id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
       debit_account: "1-10200", credit_account: "", amount: totalCost,
@@ -1526,7 +1533,6 @@ function PlaiInventory() {
       source_id: String(ts), period_label: periodLabel,
       memo: "Production order masuk", tags: "Production; Inventory In"
     });
-    // Credit per material
     for (const m of masukMaterials) {
       const mQty = parseRp(m.qty) || 0;
       const mHpp = parseRp(m.hpp_per_unit) || 0;
@@ -1540,7 +1546,6 @@ function PlaiInventory() {
         memo: "Raw material consumed", tags: m.tags || "Production"
       });
     }
-    // Credit ongkos jahit
     if (ongkosJahit > 0) {
       journalRows.push({
         id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
@@ -1550,7 +1555,6 @@ function PlaiInventory() {
         memo: "Prepaid expense — ongkos jahit", tags: "Production; Ongkos Jahit"
       });
     }
-    // Credit shipping gudang
     if (shippingGudang > 0) {
       journalRows.push({
         id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
@@ -1560,7 +1564,6 @@ function PlaiInventory() {
         memo: "Shipping vendor ke gudang", tags: "Production; Shipping"
       });
     }
-    // Credit biaya lain
     if (biayaLain > 0) {
       journalRows.push({
         id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
@@ -1571,7 +1574,10 @@ function PlaiInventory() {
       });
     }
     setJournalEntries(prev => [...journalRows, ...prev]);
-    if (sbClient) sbClient.from('journal_entries').insert(journalRows).then(({ error }) => { if (error) { console.error('Production journal insert error:', error); showToast('DB error journal: ' + error.message, 'danger'); } });
+    if (sbClient) {
+      const { error } = await sbClient.from('journal_entries').insert(journalRows);
+      if (error) { console.error('Production journal insert error:', error); showToast('DB error journal: ' + error.message, 'danger'); }
+    }
 
     // 10. Reset state + toast
     showToast(`✓ Produksi ${item.nama} +${qty} masuk · HPP Rp ${hppPerUnit.toLocaleString("id-ID")}/pcs · Total Rp ${totalCost.toLocaleString("id-ID")}`);
@@ -3884,10 +3890,10 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                 <tr key={t.id}><td style={s.td}>{t.tanggal}</td><td style={s.td}><span style={s.skuBadge}>{t.sku}</span></td><td style={s.td}>{t.nama}</td><td style={{ ...s.td, color: COLORS.success, fontWeight: 600 }}>+{t.jumlah}</td><td style={s.td}>{t.staff}</td>
                 <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                   {isProductionTx(t) ? (
-                    <>
-                      <span style={{ fontSize: 9, color: COLORS.textMuted, cursor: "not-allowed", marginRight: 4 }} title="Tidak bisa diedit — gunakan Retur untuk koreksi">🔒</span>
-                      {isFlowATx(t) && <button onClick={() => setReturMasukConfirm(t)} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer" }}>↩ Retur</button>}
-                    </>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ fontSize: 9, color: COLORS.textMuted }}>🔒</span>
+                      {isFlowATx(t) && <button onClick={(e) => { e.stopPropagation(); setReturMasukConfirm(t); }} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "4px 10px", fontSize: 10, cursor: "pointer", position: "relative", zIndex: 2 }}>↩ Retur</button>}
+                    </div>
                   ) : (
                     <>
                       <button onClick={() => { setEditingTx({...t}); setPage("laporan"); }} style={{ background: COLORS.aqua+"30", color: COLORS.aqua, border: `1px solid ${COLORS.aqua}50`, borderRadius: 5, padding: "2px 6px", fontSize: 10, cursor: "pointer", marginRight: 3 }}>Edit</button>
@@ -4920,10 +4926,10 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                       <td style={{ ...s.td, fontSize: 10, color: t.invoiceId ? COLORS.aqua : COLORS.textMuted, maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.invoiceId ? t.invoiceId.replace("INV-", "#") : "-"}</td>
                       <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                         {isProductionTx(t) ? (
-                          <>
-                            <span style={{ fontSize: 9, color: COLORS.textMuted, cursor: "not-allowed", marginRight: 4 }} title="Tidak bisa diedit — gunakan Retur untuk koreksi">🔒</span>
-                            {isFlowATx(t) && <button onClick={() => setReturMasukConfirm(t)} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>↩ Retur</button>}
-                          </>
+                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <span style={{ fontSize: 9, color: COLORS.textMuted }}>🔒</span>
+                            {isFlowATx(t) && <button onClick={(e) => { e.stopPropagation(); setReturMasukConfirm(t); }} style={{ background: COLORS.warning+"20", color: COLORS.warning, border: `1px solid ${COLORS.warning}40`, borderRadius: 5, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontWeight: 600, position: "relative", zIndex: 2 }}>↩ Retur</button>}
+                          </div>
                         ) : (
                           <>
                             <button onClick={() => setEditingTx({...t})} style={{ background: COLORS.aqua+"30", color: COLORS.aqua, border: `1px solid ${COLORS.aqua}50`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, marginRight: 4 }}>Edit</button>
