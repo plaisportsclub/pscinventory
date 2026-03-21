@@ -768,7 +768,11 @@ function PlaiInventory() {
   };
 
   // ── Production transaction helpers (used in masuk + laporan pages) ──
-  const isFlowATx = (t) => t.tipe === "masuk" && /PROD-\d{8}-\d{4}/.test(t.catatan || "");
+  const isFlowATx = (t) => {
+    const result = t.tipe === "masuk" && /PROD-\d{8}-\d{4}/.test(t.catatan || "");
+    if (t.tipe === "masuk") console.log("isFlowATx check:", t.catatan, "→", result);
+    return result;
+  };
   const isFlowBTx = (t) => t.tipe === "masuk" && (t.catatan || "").startsWith("White label dari");
   const isProductionTx = (t) => isFlowATx(t) || isFlowBTx(t);
 
@@ -1473,7 +1477,8 @@ function PlaiInventory() {
       if (sbClient) {
         const rm = rawMaterials.find(r => r.material_sku === m.material_sku);
         const newRmStok = Math.max(0, (rm?.stok_qty || 0) - mQty);
-        sbClient.from('raw_materials').update({ stok_qty: newRmStok }).eq('material_sku', m.material_sku);
+        sbClient.from('raw_materials').update({ stok_qty: newRmStok }).eq('material_sku', m.material_sku)
+          .then(({ error }) => { if (error) { console.error('raw_materials update error:', error); showToast('DB error raw_materials: ' + error.message, 'danger'); } });
       }
       // Build movement record
       rmmRows.push({
@@ -1485,13 +1490,15 @@ function PlaiInventory() {
       });
     }
     setRawMaterialMovements(prev => [...rmmRows, ...prev]);
-    if (sbClient && rmmRows.length > 0) sbClient.from('raw_material_movements').insert(rmmRows);
+    if (sbClient && rmmRows.length > 0) sbClient.from('raw_material_movements').insert(rmmRows)
+      .then(({ error }) => { if (error) { console.error('raw_material_movements insert error:', error); showToast('DB error movements: ' + error.message, 'danger'); } });
 
     // 7. Update purchase status
     if (masukSelectedPurchase) {
       const pid = masukSelectedPurchase.id;
       setPurchases(prev => prev.map(p => p.id === pid ? { ...p, status: "received", qty_received: qty, hpp_per_unit: hppPerUnit } : p));
-      if (sbClient) sbClient.from('purchases').update({ status: "received", qty_received: qty, hpp_per_unit: hppPerUnit }).eq('id', pid);
+      if (sbClient) sbClient.from('purchases').update({ status: "received", qty_received: qty, hpp_per_unit: hppPerUnit }).eq('id', pid)
+        .then(({ error }) => { if (error) { console.error('purchases update error:', error); showToast('DB error purchases: ' + error.message, 'danger'); } });
     }
 
     // 8. Insert production_order
@@ -1505,7 +1512,8 @@ function PlaiInventory() {
       status: "completed", period_label: periodLabel
     };
     setProductionOrders(prev => [po, ...prev]);
-    if (sbClient) sbClient.from('production_orders').insert([po]);
+    if (sbClient) sbClient.from('production_orders').insert([po])
+      .then(({ error }) => { if (error) { console.error('production_orders insert error:', error); showToast('DB error production_orders: ' + error.message, 'danger'); } });
 
     // 9. Journal entries
     const journalRows = [];
@@ -1563,7 +1571,7 @@ function PlaiInventory() {
       });
     }
     setJournalEntries(prev => [...journalRows, ...prev]);
-    if (sbClient) sbClient.from('journal_entries').insert(journalRows).then(({ error }) => { if (error) console.error('Production journal insert error:', error); });
+    if (sbClient) sbClient.from('journal_entries').insert(journalRows).then(({ error }) => { if (error) { console.error('Production journal insert error:', error); showToast('DB error journal: ' + error.message, 'danger'); } });
 
     // 10. Reset state + toast
     showToast(`✓ Produksi ${item.nama} +${qty} masuk · HPP Rp ${hppPerUnit.toLocaleString("id-ID")}/pcs · Total Rp ${totalCost.toLocaleString("id-ID")}`);
