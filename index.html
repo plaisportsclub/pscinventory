@@ -65,6 +65,7 @@ const navItems = [
   { id: "scan", label: "Quick Scan", icon: "⚡" },
   { id: "stok", label: "Cek Stok", icon: "◫" },
   { id: "masuk", label: "Barang Masuk", icon: "↓" },
+  { id: "produksi", label: "Produksi", icon: "🧵" },
   { id: "keluar", label: "Barang Keluar", icon: "↑" },
   { id: "rusak", label: "Rusak / Hilang", icon: "⚠" },
   { id: "pinjam", label: "Peminjaman", icon: "⇄" },
@@ -563,6 +564,46 @@ function PlaiInventory() {
   const [expenses, setExpenses] = useState(() => load("plai_expenses", []));
   const [incomes, setIncomes] = useState(() => load("plai_incomes", []));
   const [journalEntries, setJournalEntries] = useState([]);
+  const [rawMaterials, setRawMaterials] = useState([]);
+  const [bom, setBom] = useState([]);
+  const [productionOrders, setProductionOrders] = useState([]);
+  const [rawMaterialMovements, setRawMaterialMovements] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  // ── Barang Masuk flow state ──
+  const [masukFlow, setMasukFlow] = useState(null); // null | 'A' | 'B'
+  const [masukSelectedPurchase, setMasukSelectedPurchase] = useState(null);
+  const [masukMaterials, setMasukMaterials] = useState([]); // [{material_sku, nama, qty, hpp_per_unit, coa_account, tags}]
+  const [masukOngkosJahit, setMasukOngkosJahit] = useState(0);
+  const [masukShippingGudang, setMasukShippingGudang] = useState(0);
+  const [masukBiayaLain, setMasukBiayaLain] = useState(0);
+  const [masukQtyProduced, setMasukQtyProduced] = useState(0);
+  const [masukProductSku, setMasukProductSku] = useState("");
+  const [masukVendor, setMasukVendor] = useState("");
+  const [masukStep, setMasukStep] = useState(1); // 1=pilih purchase, 2=material+biaya, 3=summary
+  // white label (Flow B) form state
+  const [wlSku, setWlSku] = useState("");
+  const [wlQty, setWlQty] = useState(1);
+  const [wlVendor, setWlVendor] = useState("");
+  const [wlHarga, setWlHarga] = useState("");
+  const [wlStaff, setWlStaff] = useState(STAFF_LIST[0]);
+  const [wlSearch, setWlSearch] = useState("");
+  const [wlDropOpen, setWlDropOpen] = useState(false);
+  const [produksiTab, setProduksiTab] = useState("bahan_baku"); // "bahan_baku" | "bom" | "riwayat"
+  // bahan baku modal state
+  const [rmFilter, setRmFilter] = useState("");
+  const [showRmModal, setShowRmModal] = useState(false);
+  const [showTambahStokModal, setShowTambahStokModal] = useState(null); // rm object or null
+  const [rmForm, setRmForm] = useState({ nama: "", material_sku: "", kategori: "kain", satuan: "yard", hpp_per_unit: "", supplier: "", tags: "", coa_account: "1-10201", stok_awal: "" });
+  const [tsForm, setTsForm] = useState({ qty: "", harga: "", tanggal: new Date().toISOString().split("T")[0], catatan: "" });
+  // BOM sub-tab state
+  const [bomSelectedSku, setBomSelectedSku] = useState("");
+  const [bomSkuSearch, setBomSkuSearch] = useState("");
+  const [showBomForm, setShowBomForm] = useState(false);
+  const [bomForm, setBomForm] = useState({ material_sku: "", qty_per_unit: "", tipe_produksi: "both" });
+  // riwayat produksi state
+  const [riwayatPeriod, setRiwayatPeriod] = useState(new Date().toISOString().substring(0, 7)); // "YYYY-MM"
+  const [riwayatTipeFilter, setRiwayatTipeFilter] = useState("semua");
+  const [expandedPO, setExpandedPO] = useState(null); // production_order id
   // expense form
   const [expDate, setExpDate] = useState(new Date().toISOString().split("T")[0]);
   const [expAccount, setExpAccount] = useState("");
@@ -823,7 +864,7 @@ function PlaiInventory() {
     const loadAll = async () => {
       setSbSyncing(true);
       try {
-        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }, { data: expData, error: e5 }, { data: incData, error: e6 }, { data: jeData, error: e7 }] = await Promise.all([
+        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }, { data: expData, error: e5 }, { data: incData, error: e6 }, { data: jeData, error: e7 }, { data: rmData, error: e8 }, { data: bomData, error: e9 }, { data: poData, error: e10 }, { data: rmmData, error: e11 }, { data: purchData, error: e12 }] = await Promise.all([
           sbClient.from('inventory').select('*'),
           sbClient.from('transactions').select('*').order('id', { ascending: false }),
           sbClient.from('pinjaman').select('*').order('id', { ascending: false }),
@@ -831,6 +872,11 @@ function PlaiInventory() {
           sbClient.from('expenses').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
           sbClient.from('incomes').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
           sbClient.from('journal_entries').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('raw_materials').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('bill_of_materials').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('production_orders').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('raw_material_movements').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('purchases').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
         ]);
         if (e1 || e2 || e3) throw new Error((e1 || e2 || e3).message);
         if (inv && inv.length > 0) setInventory(inv);
@@ -844,6 +890,11 @@ function PlaiInventory() {
         if (expData) setExpenses(expData);
         if (incData) setIncomes(incData);
         if (jeData) setJournalEntries(jeData);
+        if (rmData) setRawMaterials(rmData);
+        if (bomData) setBom(bomData);
+        if (poData) setProductionOrders(poData);
+        if (rmmData) setRawMaterialMovements(rmmData);
+        if (purchData) setPurchases(purchData);
         setSbConnected(true);
         showToast('✓ Terhubung ke database!', 'success');
       } catch(e) {
@@ -886,6 +937,14 @@ function PlaiInventory() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'journal_entries' }, async () => {
         const { data } = await sbClient.from('journal_entries').select('*').order('id', { ascending: false });
         if (data) setJournalEntries(data);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'raw_materials' }, async () => {
+        const { data } = await sbClient.from('raw_materials').select('*').order('id', { ascending: false });
+        if (data) setRawMaterials(data);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'purchases' }, async () => {
+        const { data } = await sbClient.from('purchases').select('*').order('id', { ascending: false });
+        if (data) setPurchases(data);
       })
       .subscribe();
     return () => sbClient.removeChannel(ch);
@@ -943,6 +1002,14 @@ function PlaiInventory() {
       if (error) { console.error('Supabase inventory update error:', error); showToast('DB sync error: ' + error.message, 'danger'); }
       else await sbRefetchInventory();
     } catch(e) { console.error('sbUpsertInventory error:', e); }
+  };
+  const sbUpsertInventoryHpp = async (sku, newStok, newHpp) => {
+    if (!sbClient) return;
+    try {
+      const { error } = await sbClient.from('inventory').update({ stok: newStok, hpp: newHpp }).eq('sku', sku);
+      if (error) { console.error('Supabase inventory+hpp update error:', error); showToast('DB sync error: ' + error.message, 'danger'); }
+      else await sbRefetchInventory();
+    } catch(e) { console.error('sbUpsertInventoryHpp error:', e); }
   };
   const sbInsertTx = async (tx) => {
     if (!sbClient) { showToast('⚠ Database belum terhubung — transaksi hanya tersimpan lokal!', 'danger'); return; }
@@ -1221,6 +1288,201 @@ function PlaiInventory() {
     showToast(`✓ Restock ${data.nama} +${data.jumlah} berhasil dicatat`);
     sbUpsertInventory(data.sku, newStok);
     sbInsertTx(tx);
+  };
+
+  const handleMasukFlowB = (data) => {
+    // Flow B: White label / beli jadi — stok +qty, update hpp, journal Dr.1-10200 / Cr.1-10002-2
+    const item = inventory.find(i => i.sku === data.sku);
+    if (!item) { showToast("Pilih produk dulu!", "danger"); return; }
+    const qty = parseInt(data.jumlah) || 0;
+    const hargaBeli = parseRp(data.hargaBeli) || 0;
+    if (qty <= 0 || hargaBeli <= 0) { showToast("Isi qty dan harga beli!", "danger"); return; }
+    const newStok = (item.stok || 0) + qty;
+    const totalCost = hargaBeli * qty;
+    const today = new Date().toISOString().split("T")[0];
+    const dateStr = today.replace(/-/g, "");
+    const ts = Date.now();
+
+    // 1. Update inventory stok + hpp
+    setInventory(prev => prev.map(i => i.sku === data.sku ? { ...i, stok: newStok, hpp: hargaBeli } : i));
+    sbUpsertInventoryHpp(data.sku, newStok, hargaBeli);
+
+    // 2. Insert transaction (masuk)
+    const tx = {
+      id: ts, tanggal: today, sku: data.sku, nama: item.nama,
+      tipe: "masuk", jumlah: qty, harga: item.harga || 0,
+      channel: "-", shipping: "none", shippingCost: 0,
+      catatan: `White label dari ${data.vendor || "vendor"} @Rp ${hargaBeli.toLocaleString("id-ID")}`,
+      staff: data.staff || "Sinta"
+    };
+    setTransactions(prev => [tx, ...prev]);
+    sbInsertTx(tx);
+
+    // 3. Journal entry: Dr. 1-10200 Inventory / Cr. 1-10002-2 Bank
+    const ref = `WL-${dateStr}-${String(ts).slice(-4)}`;
+    const jeDesc = `White label: ${item.nama} x${qty} @Rp ${hargaBeli.toLocaleString("id-ID")}`;
+    const journalRows = [
+      { id: ts + 10, date: today, reference: ref, journal_type: "PRODUCTION", debit_account: "1-10200", credit_account: "", amount: totalCost, description: jeDesc, source_sku: data.sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "White label masuk", tags: "White Label; Inventory In" },
+      { id: ts + 11, date: today, reference: ref, journal_type: "PRODUCTION", debit_account: "", credit_account: "1-10002-2", amount: totalCost, description: jeDesc, source_sku: data.sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "White label masuk", tags: "White Label; Bank Out" }
+    ];
+    setJournalEntries(prev => [...journalRows, ...prev]);
+    if (sbClient) sbClient.from('journal_entries').insert(journalRows).then(({ error }) => { if (error) console.error('WL journal insert error:', error); });
+
+    showToast(`✓ White label ${item.nama} +${qty} masuk · HPP Rp ${hargaBeli.toLocaleString("id-ID")}`);
+    setMasukFlow(null);
+  };
+
+  const handleMasukFlowA = async () => {
+    // Flow A: Dari vendor produksi — consume materials, production order, journal entries
+    const item = inventory.find(i => i.sku === masukProductSku);
+    if (!item) { showToast("Pilih produk dulu!", "danger"); return; }
+    if (masukQtyProduced <= 0) { showToast("Isi qty produced!", "danger"); return; }
+    if (masukMaterials.length === 0) { showToast("Tambah minimal 1 material!", "danger"); return; }
+
+    const qty = parseInt(masukQtyProduced);
+    const today = new Date().toISOString().split("T")[0];
+    const dateStr = today.replace(/-/g, "");
+    const ts = Date.now();
+    const ongkosJahit = parseRp(masukOngkosJahit) || 0;
+    const shippingGudang = parseRp(masukShippingGudang) || 0;
+    const biayaLain = parseRp(masukBiayaLain) || 0;
+
+    // 1. Hitung total cost
+    const materialTotal = masukMaterials.reduce((s, m) => s + ((parseRp(m.qty) || 0) * (parseRp(m.hpp_per_unit) || 0)), 0);
+    const totalCost = materialTotal + ongkosJahit + shippingGudang + biayaLain;
+    const hppPerUnit = Math.round(totalCost / qty);
+
+    // 2. Reference
+    const ref = `PROD-${dateStr}-${String(ts).slice(-4)}`;
+    const periodLabel = today.substring(0, 7);
+
+    // 3. Update inventory stok + hpp
+    const newStok = (item.stok || 0) + qty;
+    setInventory(prev => prev.map(i => i.sku === masukProductSku ? { ...i, stok: newStok, hpp: hppPerUnit } : i));
+    sbUpsertInventoryHpp(masukProductSku, newStok, hppPerUnit);
+
+    // 4. Insert transaction (masuk)
+    const tx = {
+      id: ts, tanggal: today, sku: masukProductSku, nama: item.nama,
+      tipe: "masuk", jumlah: qty, harga: item.harga || 0,
+      channel: "-", shipping: "none", shippingCost: 0,
+      catatan: `Produksi ${masukVendor || "vendor"} [${ref}] HPP@${hppPerUnit.toLocaleString("id-ID")}`,
+      staff: "Sinta"
+    };
+    setTransactions(prev => [tx, ...prev]);
+    sbInsertTx(tx);
+
+    // 5. Kurangi stok raw materials + 6. Insert raw_material_movements
+    const rmmRows = [];
+    for (const m of masukMaterials) {
+      const mQty = parseRp(m.qty) || 0;
+      const mHpp = parseRp(m.hpp_per_unit) || 0;
+      if (mQty <= 0) continue;
+      // Update local state
+      setRawMaterials(prev => prev.map(rm =>
+        rm.material_sku === m.material_sku ? { ...rm, stok_qty: Math.max(0, (rm.stok_qty || 0) - mQty) } : rm
+      ));
+      // Update Supabase raw_materials
+      if (sbClient) {
+        const rm = rawMaterials.find(r => r.material_sku === m.material_sku);
+        const newRmStok = Math.max(0, (rm?.stok_qty || 0) - mQty);
+        sbClient.from('raw_materials').update({ stok_qty: newRmStok }).eq('material_sku', m.material_sku);
+      }
+      // Build movement record
+      rmmRows.push({
+        id: ts + 100 + rmmRows.length,
+        date: today, material_sku: m.material_sku, tipe: "keluar",
+        qty: mQty, hpp_per_unit: mHpp, total_value: mQty * mHpp,
+        reference: ref, catatan: `Konsumsi untuk ${item.nama} x${qty}`,
+        tags: m.tags || ""
+      });
+    }
+    setRawMaterialMovements(prev => [...rmmRows, ...prev]);
+    if (sbClient && rmmRows.length > 0) sbClient.from('raw_material_movements').insert(rmmRows);
+
+    // 7. Update purchase status
+    if (masukSelectedPurchase) {
+      const pid = masukSelectedPurchase.id;
+      setPurchases(prev => prev.map(p => p.id === pid ? { ...p, status: "received", qty_received: qty, hpp_per_unit: hppPerUnit } : p));
+      if (sbClient) sbClient.from('purchases').update({ status: "received", qty_received: qty, hpp_per_unit: hppPerUnit }).eq('id', pid);
+    }
+
+    // 8. Insert production_order
+    const po = {
+      id: ts + 200, date: today, reference: ref,
+      product_sku: masukProductSku, product_nama: item.nama,
+      tipe_produksi: masukSelectedPurchase?.tipe_produksi || "vendor_full",
+      vendor: masukVendor || "", qty_produced: qty,
+      total_cost: totalCost, hpp_per_unit: hppPerUnit,
+      purchase_id: masukSelectedPurchase?.id || null,
+      status: "completed", period_label: periodLabel
+    };
+    setProductionOrders(prev => [po, ...prev]);
+    if (sbClient) sbClient.from('production_orders').insert([po]);
+
+    // 9. Journal entries
+    const journalRows = [];
+    let jeIdx = 0;
+    // Debit: Dr. 1-10200 Inventory Finished Products
+    journalRows.push({
+      id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
+      debit_account: "1-10200", credit_account: "", amount: totalCost,
+      description: `Produksi ${item.nama} x${qty}`, source_sku: masukProductSku,
+      source_id: String(ts), period_label: periodLabel,
+      memo: "Production order masuk", tags: "Production; Inventory In"
+    });
+    // Credit per material
+    for (const m of masukMaterials) {
+      const mQty = parseRp(m.qty) || 0;
+      const mHpp = parseRp(m.hpp_per_unit) || 0;
+      const mTotal = mQty * mHpp;
+      if (mTotal <= 0) continue;
+      journalRows.push({
+        id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
+        debit_account: "", credit_account: m.coa_account || "1-10201", amount: mTotal,
+        description: `Konsumsi ${m.nama} ${mQty}${m.satuan || "pcs"}`,
+        source_sku: masukProductSku, source_id: String(ts), period_label: periodLabel,
+        memo: "Raw material consumed", tags: m.tags || "Production"
+      });
+    }
+    // Credit ongkos jahit
+    if (ongkosJahit > 0) {
+      journalRows.push({
+        id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
+        debit_account: "", credit_account: "1-10402", amount: ongkosJahit,
+        description: `Ongkos jahit ${masukVendor || "vendor"}`,
+        source_sku: masukProductSku, source_id: String(ts), period_label: periodLabel,
+        memo: "Prepaid expense — ongkos jahit", tags: "Production; Ongkos Jahit"
+      });
+    }
+    // Credit shipping gudang
+    if (shippingGudang > 0) {
+      journalRows.push({
+        id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
+        debit_account: "", credit_account: "1-10002-2", amount: shippingGudang,
+        description: `Shipping gudang dari ${masukVendor || "vendor"}`,
+        source_sku: masukProductSku, source_id: String(ts), period_label: periodLabel,
+        memo: "Shipping vendor ke gudang", tags: "Production; Shipping"
+      });
+    }
+    // Credit biaya lain
+    if (biayaLain > 0) {
+      journalRows.push({
+        id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
+        debit_account: "", credit_account: "1-10002-2", amount: biayaLain,
+        description: `Biaya lain produksi: ${masukVendor || "vendor"}`,
+        source_sku: masukProductSku, source_id: String(ts), period_label: periodLabel,
+        memo: "Additional production cost", tags: "Production; Biaya Lain"
+      });
+    }
+    setJournalEntries(prev => [...journalRows, ...prev]);
+    if (sbClient) sbClient.from('journal_entries').insert(journalRows).then(({ error }) => { if (error) console.error('Production journal insert error:', error); });
+
+    // 10. Reset state + toast
+    showToast(`✓ Produksi ${item.nama} +${qty} masuk · HPP Rp ${hppPerUnit.toLocaleString("id-ID")}/pcs · Total Rp ${totalCost.toLocaleString("id-ID")}`);
+    setMasukFlow(null); setMasukSelectedPurchase(null); setMasukMaterials([]);
+    setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0);
+    setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); setMasukStep(1);
   };
 
   const handleKeluar = (data) => {
@@ -2394,6 +2656,64 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     showToast(`✓ KOL Journal: ${kolExps.length} entries · Produk Rp ${totalProduk.toLocaleString("id-ID")} · Ongkir Rp ${totalOngkir.toLocaleString("id-ID")}`);
   };
 
+  // ── Export 8: Production Journal Entry CSV (format Jurnal.id) ──
+  const exportProductionJournalCSV = () => {
+    const prodEntries = filterByPeriod(
+      journalEntries.filter(je => je.journal_type === "PRODUCTION"),
+      keuanganPeriod
+    );
+    if (prodEntries.length === 0) {
+      showToast("⚠ Tidak ada Production journal entries di periode ini.", "warning");
+      return;
+    }
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const p = String(d).split("-");
+      return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : d;
+    };
+    // Group by reference — each production order has 1 debit + N credits
+    const byRef = {};
+    prodEntries.forEach(je => {
+      if (!byRef[je.reference]) byRef[je.reference] = [];
+      byRef[je.reference].push(je);
+    });
+    const header = "*TransactionNumber,*TransactionDate,*AccountCode,Description,*Debit,*Credit,Memo,Tags";
+    const rows = [];
+    const skippedRefs = [];
+    Object.entries(byRef).forEach(([ref, entries]) => {
+      const debitEntry = entries.find(e => e.debit_account && e.debit_account !== "");
+      const creditEntries = entries.filter(e => e.credit_account && e.credit_account !== "");
+      if (!debitEntry || creditEntries.length === 0) { skippedRefs.push(ref); return; }
+      // Debit row
+      rows.push([ref, fmtDate(debitEntry.date), debitEntry.debit_account, debitEntry.description || "", debitEntry.amount || 0, "", debitEntry.memo || "Production", debitEntry.tags || ""]);
+      // Credit rows (1 per material + ongkos jahit + shipping + biaya lain)
+      creditEntries.forEach(ce => {
+        rows.push([ref, fmtDate(ce.date), ce.credit_account, ce.description || "", "", ce.amount || 0, ce.memo || "Production", ce.tags || ""]);
+      });
+    });
+    if (skippedRefs.length > 0) {
+      console.warn('Production export: skipped incomplete references:', skippedRefs);
+      showToast(`⚠ ${skippedRefs.length} production entry tidak lengkap di-skip.`, "warning");
+    }
+    if (rows.length === 0) {
+      showToast("⚠ Tidak ada data untuk di-export setelah filter.", "warning");
+      return;
+    }
+    const csvLines = [header, ...rows.map(r => r.map(c => {
+      const v = String(c ?? "");
+      return v.includes(",") || v.includes('"') || v.includes("\n") ? `"${v.replace(/"/g, '""')}"` : v;
+    }).join(","))];
+    const csv = csvLines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Plai_ProductionJournalEntry_${getPeriodLabel()}_${getDateStr()}.csv`;
+    a.click();
+    const totalDebit = prodEntries.filter(e => e.debit_account === "1-10200").reduce((s, e) => s + (e.amount || 0), 0);
+    const refCount = Object.keys(byRef).length - skippedRefs.length;
+    showToast(`✓ Production CSV: ${refCount} production orders · Total Rp ${totalDebit.toLocaleString("id-ID")} — siap upload ke Jurnal.id`);
+  };
+
   // ── Export Semua: all 5 sheets in one Excel ──
   const exportKeuanganExcel = () => {
     const { filteredExp, filteredInc, fmtPayMethod, fromAccCode, expNum, incNum, fmtDate, revenueTag,
@@ -3122,7 +3442,313 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
         </div>
         {/* ── /Input SKU Baru ─────────────────────────────────── */}
 
-        <ItemForm tipe="masuk" onSubmit={handleMasuk} inventory={inventory} showToast={showToast} styles={s} getStokColor={getStokColor} onOpenCamera={() => { setCameraTarget("form"); setCameraOpen(true); }} barcodeMap={barcodeMap} onBarcodeNotFound={(code) => setBarcodeRegister({ code })} />
+        {/* ── WA Bot Purchases Notification ── */}
+        {purchases.filter(p => p.source === "wa_bot" && p.status !== "received").length > 0 && (
+          <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.success}40`, background: COLORS.brownDark }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.success, marginBottom: 10 }}>📦 Purchase dari WA Bot — menunggu konfirmasi</div>
+            {purchases.filter(p => p.source === "wa_bot" && p.status !== "received").map(p => (
+              <div key={p.id} style={{ background: COLORS.brown, borderRadius: 8, padding: "10px 14px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 13, color: COLORS.cream, fontWeight: 600 }}>
+                    {p.vendor}
+                    <span style={{ background: COLORS.success, color: COLORS.brownDark, fontSize: 9, padding: "1px 6px", borderRadius: 4, fontWeight: 700, marginLeft: 8 }}>WA Bot</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: COLORS.textMuted }}>{p.date} · Rp {(p.total_amount||0).toLocaleString("id-ID")} · <span style={{ fontWeight: 600 }}>{p.status}</span></div>
+                </div>
+                <button onClick={() => { setMasukFlow("A"); setMasukSelectedPurchase(p); setMasukVendor(p.vendor); setMasukStep(2); }} style={{ background: COLORS.success, color: COLORS.brownDark, border: "none", borderRadius: 6, padding: "6px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Proses</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Flow Selector ── */}
+        {!masukFlow && (
+          <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
+            <div style={s.cardTitle}>Barang ini dari mana?</div>
+            <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Pilih jenis penerimaan barang jadi (finished goods).</p>
+            <div style={{ display: "flex", gap: 12 }}>
+              <button onClick={() => { setMasukFlow("A"); setMasukStep(1); }} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.aquaDark}`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.aqua, marginBottom: 4 }}>A) Dari Vendor Produksi</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Ada purchase / DP sebelumnya</div>
+              </button>
+              <button onClick={() => setMasukFlow("B")} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.brownLight}`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.cream, marginBottom: 4 }}>B) White Label / Beli Jadi</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Bayar dan terima bersamaan</div>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Flow B: White Label ── */}
+        {masukFlow === "B" && (() => {
+          const selItem = inventory.find(i => i.sku === wlSku);
+          const filtWl = inventory.filter(i => !i.discontinued && (!wlSearch.trim() || i.sku.toLowerCase().includes(wlSearch.toLowerCase()) || i.nama.toLowerCase().includes(wlSearch.toLowerCase())));
+          const totalWl = (parseRp(wlHarga) || 0) * (parseInt(wlQty) || 0);
+          const resetWl = () => { setMasukFlow(null); setWlSku(""); setWlQty(1); setWlVendor(""); setWlHarga(""); setWlStaff(STAFF_LIST[0]); setWlSearch(""); setWlDropOpen(false); };
+          return (
+            <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div style={s.cardTitle}>White Label / Beli Jadi</div>
+                <button onClick={resetWl} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>Batal</button>
+              </div>
+              {/* SKU selector */}
+              <div style={{ position: "relative", marginBottom: 12 }}>
+                <label style={s.label}>SKU Produk Jadi</label>
+                {selItem ? (
+                  <div style={{ background: COLORS.aqua+"15", border: `1px solid ${COLORS.aqua}40`, borderRadius: 8, padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div><div style={{ fontSize: 13, fontWeight: 600, color: COLORS.cream }}>{selItem.nama}</div><div style={{ fontSize: 11, color: COLORS.textMuted, fontFamily: "monospace" }}>{selItem.sku} · Stok: {selItem.stok}</div></div>
+                    <button onClick={() => { setWlSku(""); setWlSearch(""); }} style={{ background: "transparent", border: `1px solid ${COLORS.brownLight}`, borderRadius: 6, color: COLORS.textMuted, padding: "3px 8px", fontSize: 10, cursor: "pointer" }}>Ganti</button>
+                  </div>
+                ) : (
+                  <div>
+                    <input style={s.input} placeholder="Cari SKU / nama produk..." value={wlSearch} onChange={e => { setWlSearch(e.target.value); setWlDropOpen(true); }} onFocus={() => setWlDropOpen(true)} onBlur={() => setTimeout(() => setWlDropOpen(false), 300)} />
+                    {wlDropOpen && filtWl.length > 0 && (
+                      <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: COLORS.brownDark, border: `1px solid ${COLORS.brownLight}`, borderRadius: "0 0 8px 8px", maxHeight: 200, overflowY: "auto", zIndex: 100 }}>
+                        {filtWl.slice(0, 20).map(it => (
+                          <div key={it.sku} onMouseDown={e => e.preventDefault()} onClick={() => { setWlSku(it.sku); setWlSearch(""); setWlDropOpen(false); }} style={{ padding: "8px 12px", cursor: "pointer", borderBottom: `1px solid ${COLORS.brownLight}30`, fontSize: 12 }}>
+                            <span style={{ color: COLORS.cream, fontWeight: 600 }}>{it.nama}</span> <span style={{ color: COLORS.textMuted, fontFamily: "monospace", fontSize: 10 }}>{it.sku}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                <div><label style={s.label}>Qty Diterima</label><input style={s.input} type="number" min="1" value={wlQty} onChange={e => setWlQty(e.target.value)} /></div>
+                <div><label style={s.label}>Staff</label><select style={s.select} value={wlStaff} onChange={e => setWlStaff(e.target.value)}>{STAFF_LIST.map(st => <option key={st}>{st}</option>)}</select></div>
+              </div>
+              <div style={{ marginBottom: 12 }}><label style={s.label}>Vendor</label><input style={s.input} placeholder="Nama vendor / supplier" value={wlVendor} onChange={e => setWlVendor(e.target.value)} /></div>
+              <div style={{ marginBottom: 12 }}><label style={s.label}>Harga Beli per Unit (Rp)</label><input style={s.input} type="number" min="0" placeholder="cth: 85000" value={wlHarga} onChange={e => setWlHarga(e.target.value)} /></div>
+              {wlHarga && wlQty > 0 && (
+                <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: COLORS.textMuted }}>
+                  HPP per pcs: <span style={{ color: COLORS.success, fontWeight: 700 }}>Rp {(parseRp(wlHarga) || 0).toLocaleString("id-ID")}</span> · Total: <span style={{ color: COLORS.cream, fontWeight: 700 }}>Rp {totalWl.toLocaleString("id-ID")}</span>
+                  {selItem && <span> · Stok setelah: <span style={{ color: COLORS.success, fontWeight: 700 }}>{(selItem.stok || 0) + (parseInt(wlQty) || 0)}</span></span>}
+                </div>
+              )}
+              <button onClick={() => { handleMasukFlowB({ sku: wlSku, jumlah: wlQty, vendor: wlVendor, hargaBeli: wlHarga, staff: wlStaff }); setWlSku(""); setWlQty(1); setWlVendor(""); setWlHarga(""); setWlStaff(STAFF_LIST[0]); setWlSearch(""); }} style={s.btn("primary")}>Simpan White Label</button>
+            </div>
+          );
+        })()}
+
+        {/* ── Flow A: Vendor Produksi (wizard) ── */}
+        {masukFlow === "A" && (
+          <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <div style={s.cardTitle}>Dari Vendor Produksi — Step {masukStep}/3</div>
+              <button onClick={() => { setMasukFlow(null); setMasukStep(1); setMasukSelectedPurchase(null); setMasukMaterials([]); setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0); setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); }} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>Batal</button>
+            </div>
+            <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 16 }}>
+              {masukStep === 1 ? "Pilih purchase yang sudah ada" : masukStep === 2 ? "Input material & biaya" : "Review & konfirmasi"}
+            </div>
+            {/* ── STEP 1: Pilih Purchase ── */}
+            {masukStep === 1 && (() => {
+              const pendingPurchases = purchases.filter(p => p.status === "dp_paid" || p.status === "paid");
+              const waBotPurchases = purchases.filter(p => p.source === "wa_bot" && p.status !== "received");
+              return (
+                <div>
+                  {waBotPurchases.length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.success, marginBottom: 8 }}>📦 Pending dari WA Bot</div>
+                      {waBotPurchases.map(p => (
+                        <div key={p.id} style={{ background: COLORS.brownDark, borderRadius: 8, padding: "10px 14px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div>
+                            <div style={{ fontSize: 13, color: COLORS.cream, fontWeight: 600 }}>{p.vendor} <span style={{ background: COLORS.success, color: COLORS.brownDark, fontSize: 9, padding: "1px 6px", borderRadius: 4, fontWeight: 700, marginLeft: 6 }}>WA Bot</span></div>
+                            <div style={{ fontSize: 11, color: COLORS.textMuted }}>{p.date} · Rp {(p.total_amount||0).toLocaleString("id-ID")} · {p.status}</div>
+                          </div>
+                          <button onClick={() => { setMasukSelectedPurchase(p); setMasukVendor(p.vendor); setMasukStep(2); }} style={{ ...s.btn("primary"), fontSize: 11, padding: "6px 14px" }}>Pilih</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {pendingPurchases.length > 0 ? (
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.cream, marginBottom: 8 }}>Purchase siap diproses:</div>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={s.table}><thead><tr>{["Vendor","Tanggal","Amount","Status",""].map(h=><th key={h} style={s.th}>{h}</th>)}</tr></thead><tbody>
+                          {pendingPurchases.map(p => (
+                            <tr key={p.id}>
+                              <td style={s.td}><span style={{ fontWeight: 600, color: COLORS.cream }}>{p.vendor}</span>{p.source === "wa_bot" && <span style={{ background: COLORS.success, color: COLORS.brownDark, fontSize: 8, padding: "1px 4px", borderRadius: 3, marginLeft: 4 }}>WA</span>}</td>
+                              <td style={s.td}>{p.date}</td>
+                              <td style={s.td}>Rp {(p.total_amount||0).toLocaleString("id-ID")}</td>
+                              <td style={s.td}><span style={{ background: p.status === "paid" ? COLORS.success+"30" : COLORS.warning+"30", color: p.status === "paid" ? COLORS.success : COLORS.warning, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>{p.status}</span></td>
+                              <td style={s.td}><button onClick={() => { setMasukSelectedPurchase(p); setMasukVendor(p.vendor); setMasukStep(2); }} style={{ ...s.btn("primary"), fontSize: 10, padding: "4px 12px" }}>Pilih</button></td>
+                            </tr>
+                          ))}
+                        </tbody></table>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ textAlign: "center", padding: 20, color: COLORS.textMuted, fontSize: 13 }}>
+                      Belum ada purchase dengan status "dp_paid" atau "paid".<br/>
+                      <span style={{ fontSize: 11 }}>Buat purchase dulu atau pilih Flow B (White Label).</span>
+                    </div>
+                  )}
+                  <button onClick={() => { setMasukStep(2); }} style={{ ...s.btn("secondary"), marginTop: 12, fontSize: 11 }}>Lanjut tanpa purchase (manual)</button>
+                </div>
+              );
+            })()}
+
+            {/* ── STEP 2: Material & Biaya ── */}
+            {masukStep === 2 && (() => {
+              const selProd = inventory.find(i => i.sku === masukProductSku);
+              const autoFillBom = (sku) => {
+                const bomItems = bom.filter(b => b.product_sku === sku);
+                if (bomItems.length > 0) {
+                  const mats = bomItems.map(b => {
+                    const rm = rawMaterials.find(r => r.material_sku === b.material_sku);
+                    const qtyNeeded = (b.qty_per_unit || 0) * (parseInt(masukQtyProduced) || 0);
+                    return { material_sku: b.material_sku, nama: rm?.nama || b.material_sku, qty: qtyNeeded, hpp_per_unit: rm?.hpp_per_unit || 0, coa_account: rm?.coa_account || "1-10201", tags: rm?.tags || "", satuan: rm?.satuan || "pcs", stok_available: rm?.stok_qty || 0 };
+                  });
+                  setMasukMaterials(mats);
+                  showToast(`✓ Auto-fill ${bomItems.length} material dari BOM`);
+                }
+              };
+              const handleQtyChange = (val) => {
+                setMasukQtyProduced(val);
+                if (masukMaterials.length > 0 && masukProductSku) {
+                  const bomItems = bom.filter(b => b.product_sku === masukProductSku);
+                  if (bomItems.length > 0) {
+                    setMasukMaterials(prev => prev.map(m => {
+                      const bi = bomItems.find(b => b.material_sku === m.material_sku);
+                      return bi ? { ...m, qty: (bi.qty_per_unit || 0) * (parseInt(val) || 0) } : m;
+                    }));
+                  }
+                }
+              };
+              const addMaterial = (msku) => {
+                if (masukMaterials.find(m => m.material_sku === msku)) { showToast("Material sudah ada", "warning"); return; }
+                const rm = rawMaterials.find(r => r.material_sku === msku);
+                if (!rm) return;
+                setMasukMaterials(prev => [...prev, { material_sku: msku, nama: rm.nama, qty: 0, hpp_per_unit: rm.hpp_per_unit || 0, coa_account: rm.coa_account || "1-10201", tags: rm.tags || "", satuan: rm.satuan || "pcs", stok_available: rm.stok_qty || 0 }]);
+              };
+              const updateMat = (idx, field, val) => setMasukMaterials(prev => prev.map((m, i) => i === idx ? { ...m, [field]: val } : m));
+              const removeMat = (idx) => setMasukMaterials(prev => prev.filter((_, i) => i !== idx));
+              const matTotal = masukMaterials.reduce((acc, m) => acc + ((parseRp(m.qty) || 0) * (parseRp(m.hpp_per_unit) || 0)), 0);
+              return (
+                <div>
+                  {masukSelectedPurchase && (
+                    <div style={{ background: COLORS.aqua+"10", border: `1px solid ${COLORS.aqua}30`, borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 11, color: COLORS.textMuted }}>
+                      Purchase: <span style={{ color: COLORS.cream, fontWeight: 600 }}>{masukSelectedPurchase.vendor}</span> · {masukSelectedPurchase.date} · Rp {(masukSelectedPurchase.total_amount||0).toLocaleString("id-ID")}
+                    </div>
+                  )}
+                  {/* SKU Produk Jadi */}
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={s.label}>SKU Produk Jadi</label>
+                    <select style={s.select} value={masukProductSku} onChange={e => { setMasukProductSku(e.target.value); autoFillBom(e.target.value); }}>
+                      <option value="">-- Pilih produk --</option>
+                      {inventory.filter(i => !i.discontinued).map(i => <option key={i.sku} value={i.sku}>{i.nama} ({i.sku})</option>)}
+                    </select>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+                    <div><label style={s.label}>Qty Diterima</label><input style={s.input} type="number" min="1" value={masukQtyProduced} onChange={e => handleQtyChange(e.target.value)} /></div>
+                    <div><label style={s.label}>Vendor</label><input style={s.input} value={masukVendor} onChange={e => setMasukVendor(e.target.value)} placeholder="Nama vendor" /></div>
+                  </div>
+                  {/* Material consumed */}
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <label style={{ ...s.label, margin: 0 }}>Material yang Dikonsumsi</label>
+                      {masukProductSku && bom.filter(b => b.product_sku === masukProductSku).length > 0 && masukMaterials.length === 0 && (
+                        <button onClick={() => autoFillBom(masukProductSku)} style={{ ...s.btn("secondary"), fontSize: 10, padding: "3px 8px" }}>Auto-fill BOM</button>
+                      )}
+                    </div>
+                    {masukMaterials.length > 0 && (
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={s.table}><thead><tr>{["Material","Qty","HPP/unit","Total",""].map(h=><th key={h} style={s.th}>{h}</th>)}</tr></thead><tbody>
+                          {masukMaterials.map((m, idx) => (
+                            <tr key={idx}>
+                              <td style={s.td}><span style={{ fontSize: 12, color: COLORS.cream }}>{m.nama}</span><br/><span style={{ fontSize: 9, color: COLORS.textMuted }}>{m.material_sku}{m.stok_available !== undefined ? ` · stok: ${m.stok_available}` : ""}</span></td>
+                              <td style={s.td}><input style={{ ...s.input, width: 60, padding: "4px 6px", fontSize: 12 }} type="number" min="0" value={m.qty} onChange={e => updateMat(idx, "qty", e.target.value)} /></td>
+                              <td style={s.td}><input style={{ ...s.input, width: 80, padding: "4px 6px", fontSize: 12 }} type="number" min="0" value={m.hpp_per_unit} onChange={e => updateMat(idx, "hpp_per_unit", e.target.value)} /></td>
+                              <td style={{ ...s.td, fontWeight: 600, color: COLORS.cream }}>{((parseRp(m.qty)||0)*(parseRp(m.hpp_per_unit)||0)).toLocaleString("id-ID")}</td>
+                              <td style={s.td}><button onClick={() => removeMat(idx)} style={{ background: COLORS.danger+"20", color: COLORS.danger, border: "none", borderRadius: 4, padding: "2px 6px", fontSize: 10, cursor: "pointer" }}>×</button></td>
+                            </tr>
+                          ))}
+                        </tbody></table>
+                      </div>
+                    )}
+                    <div style={{ marginTop: 8 }}>
+                      <select style={{ ...s.select, fontSize: 11 }} value="" onChange={e => { if (e.target.value) addMaterial(e.target.value); }}>
+                        <option value="">+ Tambah Material...</option>
+                        {rawMaterials.filter(rm => !masukMaterials.find(m => m.material_sku === rm.material_sku)).map(rm => <option key={rm.material_sku} value={rm.material_sku}>{rm.nama} ({rm.material_sku}) — stok: {rm.stok_qty}</option>)}
+                      </select>
+                    </div>
+                    {masukMaterials.length > 0 && <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6 }}>Subtotal material: <span style={{ color: COLORS.cream, fontWeight: 600 }}>Rp {matTotal.toLocaleString("id-ID")}</span></div>}
+                  </div>
+                  {/* Biaya Tambahan */}
+                  <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.cream, marginBottom: 10 }}>Biaya Tambahan</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                      <div><label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Ongkos Jahit (Rp)</label><input style={s.input} type="number" min="0" value={masukOngkosJahit} onChange={e => setMasukOngkosJahit(e.target.value)} /></div>
+                      <div><label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Shipping Gudang (Rp)</label><input style={s.input} type="number" min="0" value={masukShippingGudang} onChange={e => setMasukShippingGudang(e.target.value)} /></div>
+                      <div><label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Biaya Lain (Rp)</label><input style={s.input} type="number" min="0" value={masukBiayaLain} onChange={e => setMasukBiayaLain(e.target.value)} /></div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => setMasukStep(1)} style={{ ...s.btn("secondary"), flex: 1 }}>Kembali</button>
+                    <button onClick={() => { if (!masukProductSku) { showToast("Pilih produk dulu!", "danger"); return; } if (masukQtyProduced <= 0) { showToast("Isi qty!", "danger"); return; } if (masukMaterials.length === 0) { showToast("Tambah minimal 1 material!", "danger"); return; } setMasukStep(3); }} style={{ ...s.btn("primary"), flex: 2 }}>Lanjut → Summary</button>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── STEP 3: Summary & Konfirmasi ── */}
+            {masukStep === 3 && (() => {
+              const selProd = inventory.find(i => i.sku === masukProductSku);
+              const matTotal = masukMaterials.reduce((acc, m) => acc + ((parseRp(m.qty)||0) * (parseRp(m.hpp_per_unit)||0)), 0);
+              const ongkos = parseRp(masukOngkosJahit) || 0;
+              const shipping = parseRp(masukShippingGudang) || 0;
+              const lain = parseRp(masukBiayaLain) || 0;
+              const totalCost = matTotal + ongkos + shipping + lain;
+              const qty = parseInt(masukQtyProduced) || 0;
+              const hppPcs = qty > 0 ? Math.round(totalCost / qty) : 0;
+              const lowStockWarnings = masukMaterials.filter(m => { const rm = rawMaterials.find(r => r.material_sku === m.material_sku); return rm && (parseRp(m.qty) || 0) > (rm.stok_qty || 0); });
+              return (
+                <div>
+                  <div style={{ background: COLORS.brownDark, borderRadius: 10, padding: 16, marginBottom: 14 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.cream, marginBottom: 10 }}>{selProd?.nama || masukProductSku} × {qty} pcs</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted }}><span>Total Material ({masukMaterials.length} jenis)</span><span style={{ color: COLORS.cream }}>Rp {matTotal.toLocaleString("id-ID")}</span></div>
+                      {ongkos > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted }}><span>Ongkos Jahit</span><span style={{ color: COLORS.cream }}>Rp {ongkos.toLocaleString("id-ID")}</span></div>}
+                      {shipping > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted }}><span>Shipping Gudang</span><span style={{ color: COLORS.cream }}>Rp {shipping.toLocaleString("id-ID")}</span></div>}
+                      {lain > 0 && <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted }}><span>Biaya Lain</span><span style={{ color: COLORS.cream }}>Rp {lain.toLocaleString("id-ID")}</span></div>}
+                      <div style={{ borderTop: `1px solid ${COLORS.brownLight}`, marginTop: 6, paddingTop: 8, display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
+                        <span style={{ color: COLORS.cream }}>Total HPP Batch</span><span style={{ color: COLORS.cream }}>Rp {totalCost.toLocaleString("id-ID")}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 14 }}>
+                        <span style={{ color: COLORS.success }}>HPP per pcs</span><span style={{ color: COLORS.success }}>Rp {hppPcs.toLocaleString("id-ID")}</span>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Material detail */}
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: COLORS.textMuted, marginBottom: 6 }}>Detail Material:</div>
+                    {masukMaterials.map((m, i) => (
+                      <div key={i} style={{ fontSize: 11, color: COLORS.textMuted, padding: "3px 0", display: "flex", justifyContent: "space-between" }}>
+                        <span>{m.nama} — {m.qty} {m.satuan} @{(parseRp(m.hpp_per_unit)||0).toLocaleString("id-ID")}</span>
+                        <span style={{ color: COLORS.cream }}>Rp {((parseRp(m.qty)||0)*(parseRp(m.hpp_per_unit)||0)).toLocaleString("id-ID")}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Warnings */}
+                  {lowStockWarnings.length > 0 && (
+                    <div style={{ background: COLORS.danger+"15", border: `1px solid ${COLORS.danger}40`, borderRadius: 8, padding: "10px 14px", marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.danger, marginBottom: 4 }}>⚠ Stok Bahan Baku Tidak Cukup</div>
+                      {lowStockWarnings.map((m, i) => {
+                        const rm = rawMaterials.find(r => r.material_sku === m.material_sku);
+                        return <div key={i} style={{ fontSize: 11, color: COLORS.danger }}>{m.nama}: butuh {m.qty}, stok {rm?.stok_qty || 0}</div>;
+                      })}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => setMasukStep(2)} style={{ ...s.btn("secondary"), flex: 1 }}>Kembali</button>
+                    <button onClick={handleMasukFlowA} style={{ ...s.btn("primary"), flex: 2, background: COLORS.success, color: COLORS.brownDark }}>Konfirmasi Produksi Masuk</button>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
 
         {/* Pengembalian Pinjaman Section */}
         {activePinjaman.length > 0 && (
@@ -3171,6 +3797,440 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
         </div>
       </div>
     );},
+
+    produksi: () => {
+      const prodSubTabs = [
+        { id: "bahan_baku", label: "Bahan Baku", icon: "🧶" },
+        { id: "bom", label: "BOM", icon: "📋" },
+        { id: "riwayat", label: "Riwayat", icon: "📦" },
+      ];
+      const totalNilaiBahanBaku = rawMaterials.reduce((s, rm) => s + ((rm.stok_qty || 0) * (rm.hpp_per_unit || 0)), 0);
+      return (
+        <div style={{ maxWidth: 700, margin: "0 auto" }}>
+          {/* Sub-tab navigation */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
+            {prodSubTabs.map(st => (
+              <button key={st.id} onClick={() => setProduksiTab(st.id)}
+                style={{ flex: 1, minWidth: 70, padding: "10px 8px", background: produksiTab === st.id ? COLORS.aqua : COLORS.brownDark,
+                  color: produksiTab === st.id ? COLORS.brownDark : COLORS.cream, border: `1px solid ${produksiTab === st.id ? COLORS.aqua : COLORS.brownLight}`,
+                  borderRadius: 8, fontWeight: produksiTab === st.id ? 700 : 400, fontSize: 12, cursor: "pointer", textAlign: "center" }}>
+                <div style={{ fontSize: 16 }}>{st.icon}</div>
+                {st.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Sub-tab: Bahan Baku */}
+          {produksiTab === "bahan_baku" && (
+            <div>
+              {/* Header: total + tambah button */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <div style={{ fontSize: 13, color: COLORS.textMuted }}>Nilai total bahan baku: <span style={{ color: COLORS.cream, fontWeight: 700, fontSize: 15 }}>Rp {totalNilaiBahanBaku.toLocaleString("id-ID")}</span></div>
+                <button onClick={() => { setShowRmModal(true); setRmForm({ nama: "", material_sku: "", kategori: "kain", satuan: "yard", hpp_per_unit: "", supplier: "", tags: "", coa_account: "1-10201", stok_awal: "" }); }} style={{ ...s.btn("primary"), fontSize: 12, padding: "8px 16px" }}>+ Tambah Bahan Baku</button>
+              </div>
+              {/* Filter kategori */}
+              <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
+                {["", "kain", "label", "packaging", "aksesoris"].map(kat => (
+                  <button key={kat} onClick={() => setRmFilter(kat)}
+                    style={{ padding: "5px 12px", borderRadius: 6, fontSize: 11, cursor: "pointer", fontWeight: rmFilter === kat ? 700 : 400,
+                      background: rmFilter === kat ? COLORS.aqua : COLORS.brownDark, color: rmFilter === kat ? COLORS.brownDark : COLORS.cream,
+                      border: `1px solid ${rmFilter === kat ? COLORS.aqua : COLORS.brownLight}` }}>
+                    {kat === "" ? "Semua" : kat.charAt(0).toUpperCase() + kat.slice(1)}
+                  </button>
+                ))}
+              </div>
+              {/* Tabel bahan baku */}
+              <div style={{ overflowX: "auto" }}>
+                <table style={s.table}><thead><tr>{["Nama","Kategori","Stok","Satuan","HPP/unit","Nilai","Supplier","Tags","Aksi"].map(h=><th key={h} style={s.th}>{h}</th>)}</tr></thead><tbody>
+                  {rawMaterials.filter(rm => !rmFilter || rm.kategori === rmFilter).map(rm => (
+                    <tr key={rm.id}>
+                      <td style={s.td}><span style={{ color: COLORS.cream, fontWeight: 600, fontSize: 12 }}>{rm.nama}</span><br/><span style={{ fontSize: 9, color: COLORS.textMuted, fontFamily: "monospace" }}>{rm.material_sku}</span></td>
+                      <td style={s.td}><span style={{ background: COLORS.aqua+"20", color: COLORS.aqua, padding: "2px 6px", borderRadius: 4, fontSize: 10 }}>{rm.kategori || "-"}</span></td>
+                      <td style={{ ...s.td, fontWeight: 700, color: (rm.stok_qty || 0) <= 0 ? COLORS.danger : COLORS.cream }}>{rm.stok_qty || 0}</td>
+                      <td style={s.td}>{rm.satuan || "-"}</td>
+                      <td style={s.td}>{(rm.hpp_per_unit || 0).toLocaleString("id-ID")}</td>
+                      <td style={{ ...s.td, color: COLORS.cream, fontWeight: 600 }}>{((rm.stok_qty || 0) * (rm.hpp_per_unit || 0)).toLocaleString("id-ID")}</td>
+                      <td style={s.td}>{rm.supplier || "-"}</td>
+                      <td style={s.td}>{rm.tags ? <span style={{ fontSize: 10, color: COLORS.textMuted }}>{rm.tags}</span> : <span style={{ fontSize: 10, color: COLORS.danger, fontWeight: 600 }}>⚠ Belum diisi</span>}</td>
+                      <td style={{ ...s.td, whiteSpace: "nowrap" }}>
+                        <button onClick={() => { setShowTambahStokModal(rm); setTsForm({ qty: "", harga: rm.hpp_per_unit || "", tanggal: new Date().toISOString().split("T")[0], catatan: "" }); }} style={{ background: COLORS.success+"20", color: COLORS.success, border: `1px solid ${COLORS.success}40`, borderRadius: 4, padding: "3px 8px", fontSize: 10, cursor: "pointer", marginRight: 4 }}>+Stok</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {rawMaterials.filter(rm => !rmFilter || rm.kategori === rmFilter).length === 0 && (
+                    <tr><td colSpan={9} style={{ ...s.td, textAlign: "center", color: COLORS.textMuted }}>Belum ada bahan baku. Klik "+ Tambah Bahan Baku" untuk mulai.</td></tr>
+                  )}
+                </tbody></table>
+              </div>
+
+              {/* ── Modal: Tambah Bahan Baku ── */}
+              {showRmModal && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ background: COLORS.brown, borderRadius: 16, padding: 24, width: "90%", maxWidth: 480, maxHeight: "85vh", overflowY: "auto" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                      <div style={{ fontWeight: 700, color: COLORS.aqua, fontSize: 16 }}>Tambah Bahan Baku</div>
+                      <button onClick={() => setShowRmModal(false)} style={{ background: "transparent", border: "none", color: COLORS.textMuted, fontSize: 18, cursor: "pointer" }}>✕</button>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      <div><label style={s.label}>Nama Bahan Baku *</label><input style={s.input} value={rmForm.nama} onChange={e => { const v = e.target.value; setRmForm(f => ({ ...f, nama: v, material_sku: f.material_sku || ("RM-" + (f.kategori||"").toUpperCase().slice(0,3) + "-" + String(Date.now()).slice(-4)) })); }} placeholder="cth: Kain Drill Navy" /></div>
+                      <div><label style={s.label}>Material SKU</label><input style={{ ...s.input, fontFamily: "monospace" }} value={rmForm.material_sku} onChange={e => setRmForm(f => ({ ...f, material_sku: e.target.value.toUpperCase() }))} placeholder="auto-generate" /></div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div><label style={s.label}>Kategori</label><select style={s.select} value={rmForm.kategori} onChange={e => setRmForm(f => ({ ...f, kategori: e.target.value }))}>{["kain","label","packaging","aksesoris"].map(k => <option key={k} value={k}>{k.charAt(0).toUpperCase()+k.slice(1)}</option>)}</select></div>
+                        <div><label style={s.label}>Satuan</label><select style={s.select} value={rmForm.satuan} onChange={e => setRmForm(f => ({ ...f, satuan: e.target.value }))}>{["yard","meter","pcs","set","roll","gram"].map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div><label style={s.label}>HPP per unit (Rp)</label><input style={s.input} type="number" min="0" value={rmForm.hpp_per_unit} onChange={e => setRmForm(f => ({ ...f, hpp_per_unit: e.target.value }))} placeholder="0" /></div>
+                        <div><label style={s.label}>Stok Awal</label><input style={s.input} type="number" min="0" value={rmForm.stok_awal} onChange={e => setRmForm(f => ({ ...f, stok_awal: e.target.value }))} placeholder="0" /></div>
+                      </div>
+                      <div><label style={s.label}>Supplier</label><input style={s.input} value={rmForm.supplier} onChange={e => setRmForm(f => ({ ...f, supplier: e.target.value }))} placeholder="cth: Gayatri Textile" /></div>
+                      <div>
+                        <label style={s.label}>Tags (WAJIB)</label>
+                        <input style={{ ...s.input, borderColor: !rmForm.tags ? COLORS.danger : undefined }} value={rmForm.tags} onChange={e => setRmForm(f => ({ ...f, tags: e.target.value }))} placeholder="cth: Kain; Navy; Gayatri" />
+                        {!rmForm.tags && <div style={{ fontSize: 11, color: COLORS.danger, marginTop: 4 }}>⚠ Tags wajib diisi untuk membedakan jenis material di Jurnal.id. Contoh: 'Kain; Navy; Gayatri' atau 'Label; Patch; Biru'</div>}
+                      </div>
+                      <div><label style={s.label}>COA Account</label><select style={s.select} value={rmForm.coa_account} onChange={e => setRmForm(f => ({ ...f, coa_account: e.target.value }))}><option value="1-10201">1-10201 — Raw Material</option></select></div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                        <button onClick={() => setShowRmModal(false)} style={{ ...s.btn("secondary"), flex: 1 }}>Batal</button>
+                        <button onClick={() => {
+                          if (!rmForm.nama.trim()) { showToast("Nama wajib diisi!", "danger"); return; }
+                          if (!rmForm.tags.trim()) { showToast("Tags wajib diisi!", "danger"); return; }
+                          const ts = Date.now();
+                          const sku = rmForm.material_sku.trim() || ("RM-" + (rmForm.kategori||"").toUpperCase().slice(0,3) + "-" + String(ts).slice(-4));
+                          if (rawMaterials.find(r => r.material_sku === sku)) { showToast("SKU sudah ada!", "danger"); return; }
+                          const newRm = {
+                            id: ts, material_sku: sku, nama: rmForm.nama.trim(), kategori: rmForm.kategori,
+                            satuan: rmForm.satuan, stok_qty: parseInt(rmForm.stok_awal) || 0,
+                            hpp_per_unit: parseRp(rmForm.hpp_per_unit) || 0, supplier: rmForm.supplier.trim(),
+                            tags: rmForm.tags.trim(), coa_account: rmForm.coa_account, created_at: new Date().toISOString()
+                          };
+                          setRawMaterials(prev => [newRm, ...prev]);
+                          if (sbClient) sbClient.from('raw_materials').insert([newRm]).then(({ error }) => { if (error) showToast("DB error: " + error.message, "danger"); });
+                          showToast(`✓ Bahan baku "${rmForm.nama}" ditambahkan`);
+                          setShowRmModal(false);
+                        }} style={{ ...s.btn("primary"), flex: 2 }}>Simpan</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Modal: Tambah Stok ── */}
+              {showTambahStokModal && (
+                <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ background: COLORS.brown, borderRadius: 16, padding: 24, width: "90%", maxWidth: 400 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                      <div style={{ fontWeight: 700, color: COLORS.aqua, fontSize: 16 }}>Tambah Stok: {showTambahStokModal.nama}</div>
+                      <button onClick={() => setShowTambahStokModal(null)} style={{ background: "transparent", border: "none", color: COLORS.textMuted, fontSize: 18, cursor: "pointer" }}>✕</button>
+                    </div>
+                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 14 }}>
+                      SKU: {showTambahStokModal.material_sku} · Stok saat ini: <span style={{ fontWeight: 700, color: COLORS.cream }}>{showTambahStokModal.stok_qty || 0} {showTambahStokModal.satuan}</span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div><label style={s.label}>Qty Masuk</label><input style={s.input} type="number" min="1" value={tsForm.qty} onChange={e => setTsForm(f => ({ ...f, qty: e.target.value }))} /></div>
+                        <div><label style={s.label}>Harga Beli/unit (Rp)</label><input style={s.input} type="number" min="0" value={tsForm.harga} onChange={e => setTsForm(f => ({ ...f, harga: e.target.value }))} /></div>
+                      </div>
+                      <div><label style={s.label}>Tanggal</label><input style={s.input} type="date" value={tsForm.tanggal} onChange={e => setTsForm(f => ({ ...f, tanggal: e.target.value }))} /></div>
+                      <div><label style={s.label}>Catatan</label><input style={s.input} value={tsForm.catatan} onChange={e => setTsForm(f => ({ ...f, catatan: e.target.value }))} placeholder="opsional" /></div>
+                      {tsForm.qty > 0 && tsForm.harga > 0 && (
+                        <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: COLORS.textMuted }}>
+                          Total: <span style={{ color: COLORS.cream, fontWeight: 700 }}>Rp {((parseRp(tsForm.qty)||0) * (parseRp(tsForm.harga)||0)).toLocaleString("id-ID")}</span>
+                          · Stok setelah: <span style={{ color: COLORS.success, fontWeight: 700 }}>{(showTambahStokModal.stok_qty || 0) + (parseInt(tsForm.qty) || 0)} {showTambahStokModal.satuan}</span>
+                        </div>
+                      )}
+                      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                        <button onClick={() => setShowTambahStokModal(null)} style={{ ...s.btn("secondary"), flex: 1 }}>Batal</button>
+                        <button onClick={() => {
+                          const qty = parseInt(tsForm.qty) || 0;
+                          const harga = parseRp(tsForm.harga) || 0;
+                          if (qty <= 0) { showToast("Isi qty!", "danger"); return; }
+                          const rm = showTambahStokModal;
+                          const newStok = (rm.stok_qty || 0) + qty;
+                          const ts = Date.now();
+                          const today = tsForm.tanggal || new Date().toISOString().split("T")[0];
+                          // Update raw material stok + hpp
+                          setRawMaterials(prev => prev.map(r => r.material_sku === rm.material_sku ? { ...r, stok_qty: newStok, hpp_per_unit: harga > 0 ? harga : r.hpp_per_unit } : r));
+                          if (sbClient) sbClient.from('raw_materials').update({ stok_qty: newStok, ...(harga > 0 ? { hpp_per_unit: harga } : {}) }).eq('material_sku', rm.material_sku);
+                          // Insert movement
+                          const mvt = { id: ts, date: today, material_sku: rm.material_sku, tipe: "masuk", qty, hpp_per_unit: harga, total_value: qty * harga, reference: "RESTOCK", catatan: tsForm.catatan || "", tags: rm.tags || "" };
+                          setRawMaterialMovements(prev => [mvt, ...prev]);
+                          if (sbClient) sbClient.from('raw_material_movements').insert([mvt]);
+                          // Journal: Dr. 1-10201 / Cr. 1-10002-2
+                          if (harga > 0 && qty > 0) {
+                            const totalVal = qty * harga;
+                            const dateStr = today.replace(/-/g, "");
+                            const ref = `RM-${dateStr}-${String(ts).slice(-4)}`;
+                            const jeDesc = `Restock ${rm.nama} ${qty}${rm.satuan} @Rp ${harga.toLocaleString("id-ID")}`;
+                            const jeRows = [
+                              { id: ts + 10, date: today, reference: ref, journal_type: "RAW_MATERIAL", debit_account: rm.coa_account || "1-10201", credit_account: "", amount: totalVal, description: jeDesc, source_sku: rm.material_sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "Raw material restock", tags: rm.tags || "Raw Material" },
+                              { id: ts + 11, date: today, reference: ref, journal_type: "RAW_MATERIAL", debit_account: "", credit_account: "1-10002-2", amount: totalVal, description: jeDesc, source_sku: rm.material_sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "Raw material restock", tags: rm.tags || "Raw Material" }
+                            ];
+                            setJournalEntries(prev => [...jeRows, ...prev]);
+                            if (sbClient) sbClient.from('journal_entries').insert(jeRows);
+                          }
+                          showToast(`✓ Stok ${rm.nama} +${qty} · Total: ${newStok} ${rm.satuan}`);
+                          setShowTambahStokModal(null);
+                        }} style={{ ...s.btn("primary"), flex: 2 }}>Simpan Tambah Stok</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Sub-tab: BOM */}
+          {produksiTab === "bom" && (
+            <div>
+              <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 14 }}>Setup komposisi material per SKU produk. Dipakai untuk auto-fill saat produksi masuk.</p>
+              {/* SKU selector */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={s.label}>Pilih SKU Produk Jadi</label>
+                <select style={s.select} value={bomSelectedSku} onChange={e => setBomSelectedSku(e.target.value)}>
+                  <option value="">-- Pilih produk --</option>
+                  {inventory.filter(i => !i.discontinued).map(i => <option key={i.sku} value={i.sku}>{i.nama} ({i.sku})</option>)}
+                </select>
+              </div>
+
+              {bomSelectedSku && (() => {
+                const selProd = inventory.find(i => i.sku === bomSelectedSku);
+                const skuBom = bom.filter(b => b.product_sku === bomSelectedSku);
+                const estHpp = skuBom.reduce((s, b) => {
+                  const rm = rawMaterials.find(r => r.material_sku === b.material_sku);
+                  return s + ((b.qty_per_unit || 0) * (rm?.hpp_per_unit || 0));
+                }, 0);
+                return (
+                  <div>
+                    <div style={{ background: COLORS.aqua+"10", border: `1px solid ${COLORS.aqua}30`, borderRadius: 8, padding: "10px 14px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.cream }}>{selProd?.nama || bomSelectedSku}</div>
+                        <div style={{ fontSize: 11, color: COLORS.textMuted, fontFamily: "monospace" }}>{bomSelectedSku}</div>
+                      </div>
+                      <div style={{ textAlign: "right", fontSize: 11, color: COLORS.textMuted }}>
+                        BOM: {skuBom.length} material
+                      </div>
+                    </div>
+
+                    {skuBom.length > 0 ? (
+                      <div style={{ overflowX: "auto", marginBottom: 14 }}>
+                        <table style={s.table}><thead><tr>{["Material","Qty/pcs","Satuan","HPP/unit","Est. Cost/pcs","Tipe",""].map(h=><th key={h} style={s.th}>{h}</th>)}</tr></thead><tbody>
+                          {skuBom.map(b => {
+                            const rm = rawMaterials.find(r => r.material_sku === b.material_sku);
+                            const costPer = (b.qty_per_unit || 0) * (rm?.hpp_per_unit || 0);
+                            const tipeLbl = b.tipe_produksi === "vendor_full" ? "Vendor Full" : b.tipe_produksi === "cmt" ? "CMT" : "Semua";
+                            return (
+                              <tr key={b.id}>
+                                <td style={s.td}><span style={{ color: COLORS.cream, fontSize: 12 }}>{rm?.nama || b.material_sku}</span><br/><span style={{ fontSize: 9, color: COLORS.textMuted, fontFamily: "monospace" }}>{b.material_sku}</span></td>
+                                <td style={{ ...s.td, fontWeight: 600 }}>{b.qty_per_unit}</td>
+                                <td style={s.td}>{rm?.satuan || "-"}</td>
+                                <td style={s.td}>{(rm?.hpp_per_unit || 0).toLocaleString("id-ID")}</td>
+                                <td style={{ ...s.td, color: COLORS.cream, fontWeight: 600 }}>{costPer.toLocaleString("id-ID")}</td>
+                                <td style={s.td}><span style={{ background: COLORS.brownDark, padding: "2px 6px", borderRadius: 4, fontSize: 10, color: COLORS.textMuted }}>{tipeLbl}</span></td>
+                                <td style={s.td}>
+                                  <button onClick={() => {
+                                    if (!confirm(`Hapus ${rm?.nama || b.material_sku} dari BOM?`)) return;
+                                    setBom(prev => prev.filter(x => x.id !== b.id));
+                                    if (sbClient) sbClient.from('bill_of_materials').delete().eq('id', b.id);
+                                    showToast(`Material dihapus dari BOM`, "warning");
+                                  }} style={{ background: COLORS.danger+"20", color: COLORS.danger, border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 10, cursor: "pointer" }}>Hapus</button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody></table>
+                      </div>
+                    ) : (
+                      <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 20, textAlign: "center", color: COLORS.textMuted, fontSize: 13, marginBottom: 14 }}>
+                        Belum ada BOM untuk SKU ini. Tambah material dulu.
+                      </div>
+                    )}
+
+                    {/* Estimasi HPP */}
+                    {skuBom.length > 0 && (
+                      <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: COLORS.textMuted }}>
+                        Estimasi HPP dari BOM: <span style={{ color: COLORS.success, fontWeight: 700, fontSize: 14 }}>Rp {estHpp.toLocaleString("id-ID")}</span> / pcs
+                        <div style={{ fontSize: 10, marginTop: 2 }}>(belum include ongkos jahit + shipping)</div>
+                      </div>
+                    )}
+
+                    {/* Tambah Material ke BOM */}
+                    {!showBomForm ? (
+                      <button onClick={() => { setShowBomForm(true); setBomForm({ material_sku: "", qty_per_unit: "", tipe_produksi: "both" }); }} style={{ ...s.btn("primary"), fontSize: 12 }}>+ Tambah Material ke BOM</button>
+                    ) : (
+                      <div style={{ ...s.card, border: `1px solid ${COLORS.aquaDark}` }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.cream, marginBottom: 10 }}>Tambah Material ke BOM</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          <div>
+                            <label style={s.label}>Material</label>
+                            <select style={s.select} value={bomForm.material_sku} onChange={e => setBomForm(f => ({ ...f, material_sku: e.target.value }))}>
+                              <option value="">-- Pilih material --</option>
+                              {rawMaterials.filter(rm => !skuBom.find(b => b.material_sku === rm.material_sku)).map(rm => (
+                                <option key={rm.material_sku} value={rm.material_sku}>{rm.nama} ({rm.material_sku}) — {rm.kategori}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                            <div><label style={s.label}>Qty per 1 pcs produk</label><input style={s.input} type="number" min="0" step="0.01" value={bomForm.qty_per_unit} onChange={e => setBomForm(f => ({ ...f, qty_per_unit: e.target.value }))} placeholder="cth: 1.5" /></div>
+                            <div><label style={s.label}>Tipe Produksi</label><select style={s.select} value={bomForm.tipe_produksi} onChange={e => setBomForm(f => ({ ...f, tipe_produksi: e.target.value }))}><option value="both">Semua tipe</option><option value="vendor_full">Vendor Full</option><option value="cmt">CMT</option></select></div>
+                          </div>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button onClick={() => setShowBomForm(false)} style={{ ...s.btn("secondary"), flex: 1 }}>Batal</button>
+                            <button onClick={() => {
+                              if (!bomForm.material_sku) { showToast("Pilih material!", "danger"); return; }
+                              const qpu = parseFloat(bomForm.qty_per_unit) || 0;
+                              if (qpu <= 0) { showToast("Qty harus > 0!", "danger"); return; }
+                              const ts = Date.now();
+                              const newBom = { id: ts, product_sku: bomSelectedSku, material_sku: bomForm.material_sku, qty_per_unit: qpu, tipe_produksi: bomForm.tipe_produksi, created_at: new Date().toISOString() };
+                              setBom(prev => [...prev, newBom]);
+                              if (sbClient) sbClient.from('bill_of_materials').insert([newBom]).then(({ error }) => { if (error) showToast("DB error: " + error.message, "danger"); });
+                              const rm = rawMaterials.find(r => r.material_sku === bomForm.material_sku);
+                              showToast(`✓ ${rm?.nama || bomForm.material_sku} ditambahkan ke BOM`);
+                              setShowBomForm(false);
+                            }} style={{ ...s.btn("primary"), flex: 2 }}>Simpan ke BOM</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Sub-tab: Riwayat */}
+          {produksiTab === "riwayat" && (
+            <div>
+              {(() => {
+                const filteredPO = productionOrders
+                  .filter(po => !riwayatPeriod || (po.date || "").substring(0, 7) === riwayatPeriod)
+                  .filter(po => riwayatTipeFilter === "semua" || po.tipe_produksi === riwayatTipeFilter)
+                  .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+                const totalQty = filteredPO.reduce((s, po) => s + (po.qty_produced || 0), 0);
+                const totalCost = filteredPO.reduce((s, po) => s + (po.total_cost || 0), 0);
+                // Collect unique months for period dropdown
+                const months = [...new Set(productionOrders.map(po => (po.date || "").substring(0, 7)).filter(Boolean))].sort().reverse();
+                return (
+                  <div>
+                    {/* Filters */}
+                    <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+                      <div style={{ flex: 1, minWidth: 120 }}>
+                        <label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Periode</label>
+                        <select style={s.select} value={riwayatPeriod} onChange={e => setRiwayatPeriod(e.target.value)}>
+                          <option value="">Semua</option>
+                          {months.map(m => <option key={m} value={m}>{m}</option>)}
+                          {!months.includes(riwayatPeriod) && riwayatPeriod && <option value={riwayatPeriod}>{riwayatPeriod}</option>}
+                        </select>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 120 }}>
+                        <label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Tipe Produksi</label>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {[["semua","Semua"],["vendor_full","Vendor Full"],["cmt","CMT"]].map(([val,lbl]) => (
+                            <button key={val} onClick={() => setRiwayatTipeFilter(val)}
+                              style={{ padding: "5px 10px", borderRadius: 6, fontSize: 10, cursor: "pointer", fontWeight: riwayatTipeFilter === val ? 700 : 400,
+                                background: riwayatTipeFilter === val ? COLORS.aqua : COLORS.brownDark, color: riwayatTipeFilter === val ? COLORS.brownDark : COLORS.cream,
+                                border: `1px solid ${riwayatTipeFilter === val ? COLORS.aqua : COLORS.brownLight}` }}>{lbl}</button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    {/* Summary cards */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
+                      <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.cream }}>{filteredPO.length}</div>
+                        <div style={{ fontSize: 10, color: COLORS.textMuted }}>Batch</div>
+                      </div>
+                      <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.aqua }}>{totalQty.toLocaleString("id-ID")}</div>
+                        <div style={{ fontSize: 10, color: COLORS.textMuted }}>Pcs Produced</div>
+                      </div>
+                      <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.cream }}>Rp {totalCost.toLocaleString("id-ID")}</div>
+                        <div style={{ fontSize: 10, color: COLORS.textMuted }}>Total Cost</div>
+                      </div>
+                    </div>
+                    {/* Table */}
+                    {filteredPO.length > 0 ? (
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={s.table}><thead><tr>{["Tanggal","Ref","Produk","Qty","HPP/pcs","Total Cost","Tipe","Vendor"].map(h=><th key={h} style={s.th}>{h}</th>)}</tr></thead><tbody>
+                          {filteredPO.map(po => {
+                            const isExpanded = expandedPO === po.id;
+                            const poMovements = rawMaterialMovements.filter(m => m.reference === po.reference && m.tipe === "keluar");
+                            const matCost = poMovements.reduce((s, m) => s + (m.total_value || 0), 0);
+                            const poJournals = journalEntries.filter(je => je.reference === po.reference);
+                            const jahitJe = poJournals.find(je => je.credit_account === "1-10402");
+                            const shipJe = poJournals.find(je => je.credit_account === "1-10002-2" && (je.tags || "").includes("Shipping"));
+                            const lainJe = poJournals.find(je => je.credit_account === "1-10002-2" && (je.tags || "").includes("Biaya Lain"));
+                            const linkedPurchase = po.purchase_id ? purchases.find(p => p.id === po.purchase_id) : null;
+                            const tipeLbl = po.tipe_produksi === "vendor_full" ? "Vendor Full" : po.tipe_produksi === "cmt" ? "CMT" : po.tipe_produksi || "-";
+                            return (
+                              <React.Fragment key={po.id}>
+                                <tr onClick={() => setExpandedPO(isExpanded ? null : po.id)} style={{ cursor: "pointer" }}>
+                                  <td style={s.td}>{po.date}</td>
+                                  <td style={s.td}><span style={{ fontFamily: "monospace", fontSize: 10, color: COLORS.aqua }}>{po.reference}</span></td>
+                                  <td style={s.td}><span style={{ color: COLORS.cream, fontWeight: 600, fontSize: 12 }}>{po.product_nama || po.product_sku}</span><br/><span style={{ fontSize: 9, color: COLORS.textMuted }}>{po.product_sku}</span></td>
+                                  <td style={{ ...s.td, fontWeight: 700 }}>{po.qty_produced}</td>
+                                  <td style={{ ...s.td, color: COLORS.success, fontWeight: 600 }}>{(po.hpp_per_unit || 0).toLocaleString("id-ID")}</td>
+                                  <td style={{ ...s.td, fontWeight: 600 }}>{(po.total_cost || 0).toLocaleString("id-ID")}</td>
+                                  <td style={s.td}><span style={{ background: COLORS.brownDark, padding: "2px 6px", borderRadius: 4, fontSize: 9 }}>{tipeLbl}</span></td>
+                                  <td style={s.td}>{po.vendor || "-"}</td>
+                                </tr>
+                                {isExpanded && (
+                                  <tr><td colSpan={8} style={{ ...s.td, padding: 0 }}>
+                                    <div style={{ background: COLORS.brownDark, padding: 14, borderRadius: 0 }}>
+                                      {/* Material consumed */}
+                                      {poMovements.length > 0 && (
+                                        <div style={{ marginBottom: 12 }}>
+                                          <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.aqua, marginBottom: 6 }}>Material Dikonsumsi:</div>
+                                          {poMovements.map((m, i) => {
+                                            const rm = rawMaterials.find(r => r.material_sku === m.material_sku);
+                                            return (
+                                              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: COLORS.textMuted, padding: "2px 0" }}>
+                                                <span>{rm?.nama || m.material_sku} — {m.qty} {rm?.satuan || "pcs"} @{(m.hpp_per_unit||0).toLocaleString("id-ID")}</span>
+                                                <span style={{ color: COLORS.cream }}>Rp {(m.total_value||0).toLocaleString("id-ID")}</span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                      {/* Breakdown */}
+                                      <div style={{ fontSize: 11, marginBottom: 12 }}>
+                                        <div style={{ fontWeight: 700, color: COLORS.aqua, marginBottom: 6 }}>Breakdown Biaya:</div>
+                                        <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted, padding: "2px 0" }}><span>Total Material</span><span style={{ color: COLORS.cream }}>Rp {matCost.toLocaleString("id-ID")}</span></div>
+                                        {jahitJe && <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted, padding: "2px 0" }}><span>Ongkos Jahit</span><span style={{ color: COLORS.cream }}>Rp {(jahitJe.amount||0).toLocaleString("id-ID")}</span></div>}
+                                        {shipJe && <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted, padding: "2px 0" }}><span>Shipping Gudang</span><span style={{ color: COLORS.cream }}>Rp {(shipJe.amount||0).toLocaleString("id-ID")}</span></div>}
+                                        {lainJe && <div style={{ display: "flex", justifyContent: "space-between", color: COLORS.textMuted, padding: "2px 0" }}><span>Biaya Lain</span><span style={{ color: COLORS.cream }}>Rp {(lainJe.amount||0).toLocaleString("id-ID")}</span></div>}
+                                        <div style={{ borderTop: `1px solid ${COLORS.brownLight}`, marginTop: 4, paddingTop: 4, display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12 }}>
+                                          <span style={{ color: COLORS.success }}>HPP/pcs</span><span style={{ color: COLORS.success }}>Rp {(po.hpp_per_unit||0).toLocaleString("id-ID")}</span>
+                                        </div>
+                                      </div>
+                                      {/* Linked purchase */}
+                                      {linkedPurchase && (
+                                        <div style={{ fontSize: 10, color: COLORS.textMuted, background: COLORS.brown, borderRadius: 6, padding: "6px 10px" }}>
+                                          Linked Purchase: <span style={{ color: COLORS.cream }}>{linkedPurchase.vendor}</span> · {linkedPurchase.date} · Rp {(linkedPurchase.total_amount||0).toLocaleString("id-ID")} · <span style={{ color: COLORS.success }}>{linkedPurchase.status}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td></tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </tbody></table>
+                      </div>
+                    ) : (
+                      <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: 24, textAlign: "center", color: COLORS.textMuted, fontSize: 13 }}>
+                        Belum ada riwayat produksi.<br/>
+                        <span style={{ fontSize: 11 }}>Input produksi masuk via tab Barang Masuk.</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      );
+    },
 
     keluar: () => (
       <div style={{ maxWidth: 600 }}>
@@ -5208,6 +6268,24 @@ END $$;`;
                     style={{ ...s.btn("secondary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700, border: `1px solid #F0A50060`, color: "#F0A500" }}>
                     📱 KOL Journal Entry Excel
                   </button>
+                </div>
+
+                {/* Production Journal */}
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 12, border: `1px solid ${COLORS.aquaDark}40` }}>
+                  <div style={{ fontWeight: 600, color: COLORS.aqua, marginBottom: 4, fontSize: 12 }}>🧵 Jurnal Produksi</div>
+                  <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>
+                    Dr. 1-10200 Inventory Finished Products<br/>
+                    → Cr. 1-10201 Raw Material (per material, pakai tags)<br/>
+                    → Cr. 1-10402 Prepaid (ongkos jahit)<br/>
+                    → Cr. 1-10002-2 Bank (shipping + biaya lain)
+                  </div>
+                  <button onClick={exportProductionJournalCSV}
+                    style={{ ...s.btn("primary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700 }}>
+                    🧵 Export Production Journal Entry (.csv)
+                  </button>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6 }}>
+                    Format 8 kolom Jurnal.id · 1 production order = 1 TransactionNumber · Balanced per transaksi
+                  </div>
                 </div>
 
                 {/* Export Semua */}
