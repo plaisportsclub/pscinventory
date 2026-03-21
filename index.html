@@ -42,21 +42,7 @@ const COLORS = {
   textMuted: "#A89890",
 };
 
-const INITIAL_INVENTORY = [
-  { sku: "PLI-FUT-001", nama: "Bola Futsal Ukuran 4", kategori: "Futsal", stok: 8, minimum: 5, harga: 150000, satuan: "pcs" },
-  { sku: "PLI-FUT-002", nama: "Bola Futsal Ukuran 5", kategori: "Futsal", stok: 3, minimum: 5, harga: 175000, satuan: "pcs" },
-  { sku: "PLI-BAD-001", nama: "Raket Badminton Yonex", kategori: "Badminton", stok: 12, minimum: 4, harga: 450000, satuan: "pcs" },
-  { sku: "PLI-BAD-002", nama: "Shuttlecock Feather", kategori: "Badminton", stok: 2, minimum: 10, harga: 35000, satuan: "tube" },
-  { sku: "PLI-GYM-001", nama: "Dumbbell 5kg", kategori: "Gym", stok: 6, minimum: 4, harga: 120000, satuan: "pcs" },
-  { sku: "PLI-GYM-002", nama: "Dumbbell 10kg", kategori: "Gym", stok: 4, minimum: 4, harga: 220000, satuan: "pcs" },
-  { sku: "PLI-GYM-003", nama: "Resistance Band Set", kategori: "Gym", stok: 1, minimum: 3, harga: 85000, satuan: "set" },
-  { sku: "PLI-TEN-001", nama: "Bola Tenis", kategori: "Tenis", stok: 24, minimum: 6, harga: 25000, satuan: "pcs" },
-  { sku: "PLI-TEN-002", nama: "Raket Tenis Wilson", kategori: "Tenis", stok: 5, minimum: 2, harga: 750000, satuan: "pcs" },
-  { sku: "PLI-ACC-001", nama: "Net Badminton", kategori: "Aksesoris", stok: 3, minimum: 2, harga: 200000, satuan: "pcs" },
-  { sku: "PLI-ACC-002", nama: "Pompa Bola", kategori: "Aksesoris", stok: 2, minimum: 2, harga: 65000, satuan: "pcs" },
-  { sku: "PLI-RTL-001", nama: "Kaos Plai Sports", kategori: "Retail", stok: 20, minimum: 5, harga: 120000, satuan: "pcs" },
-  { sku: "PLI-RTL-002", nama: "Tas Gym Plai", kategori: "Retail", stok: 7, minimum: 3, harga: 280000, satuan: "pcs" },
-];
+const INITIAL_INVENTORY = [];
 
 const INITIAL_TRANSACTIONS = [
   { id: 1, tanggal: "2025-03-10", sku: "PLI-FUT-001", nama: "Bola Futsal Ukuran 4", tipe: "keluar", jumlah: 2, harga: 150000, channel: "event", shipping: "pelanggan", shippingCost: 0, catatan: "", staff: "Sinta" },
@@ -159,7 +145,7 @@ const CHANNEL_TAGS = {
   dm: "DM; Online B2C",
   shopee: "Shopee; Online B2C",
   tokopedia: "Tokopedia; Online B2C",
-  tiktok: "TikTok; Online B2C",
+  tiktok: "TikTok Shop; Online B2C",
   consignment: "Consignment",
   b2b: "B2B",
 };
@@ -1025,7 +1011,7 @@ function PlaiInventory() {
     consignment: "4-40000", b2b: "4-40000",
   };
   // Jurnal.id tags per channel — uses global CHANNEL_TAGS (defined above ItemForm)
-  // TikTok fix: was "Tokopedia; Online B2C", now "TikTok; Online B2C" in global def
+  // TikTok fix: was "Tokopedia; Online B2C", now "TikTok Shop; Online B2C" in global def
   const CHANNEL_LABELS = {
     event: "Walk in/Event", wa: "WA Order", dm: "DM Order", web: "Website",
     shopee: "Shopee", tokopedia: "Tokped/Tiktok", tiktok: "TikTok",
@@ -4941,14 +4927,14 @@ UPDATE incomes SET tags = CASE
   WHEN channel = 'dm'          THEN 'DM; Online B2C'
   WHEN channel = 'shopee'      THEN 'Shopee; Online B2C'
   WHEN channel = 'tokopedia'   THEN 'Tokopedia; Online B2C'
-  WHEN channel = 'tiktok'      THEN 'Tokopedia; Online B2C'
+  WHEN channel = 'tiktok'      THEN 'TikTok Shop; Online B2C'
   WHEN channel = 'consignment' THEN 'Consignment'
   WHEN channel = 'b2b'         THEN 'B2B'
   ELSE channel
 END
 WHERE tags IS NULL;`}
                 </pre>
-                <button onClick={() => { navigator.clipboard.writeText(`-- Backfill: unify all income records to COA 4-40000\nUPDATE incomes\nSET revenue_account_code = '4-40000'\nWHERE revenue_account_code IS NULL\n   OR revenue_account_code != '4-40000';\n\nALTER TABLE incomes ADD COLUMN IF NOT EXISTS tags text;\nALTER TABLE incomes ADD COLUMN IF NOT EXISTS revenue_account_code text DEFAULT '4-40000';\n\nUPDATE incomes SET tags = CASE\n  WHEN channel = 'event'       THEN 'Event; Offline B2C'\n  WHEN channel = 'web'         THEN 'Shopify; Online B2C'\n  WHEN channel = 'wa'          THEN 'WA; Online B2C'\n  WHEN channel = 'dm'          THEN 'DM; Online B2C'\n  WHEN channel = 'shopee'      THEN 'Shopee; Online B2C'\n  WHEN channel = 'tokopedia'   THEN 'Tokopedia; Online B2C'\n  WHEN channel = 'tiktok'      THEN 'Tokopedia; Online B2C'\n  WHEN channel = 'consignment' THEN 'Consignment'\n  WHEN channel = 'b2b'         THEN 'B2B'\n  ELSE channel\nEND\nWHERE tags IS NULL;`); showToast("✓ Backfill SQL disalin!"); }}
+                <button onClick={() => { navigator.clipboard.writeText(`-- Backfill: unify all income records to COA 4-40000\nUPDATE incomes\nSET revenue_account_code = '4-40000'\nWHERE revenue_account_code IS NULL\n   OR revenue_account_code != '4-40000';\n\nALTER TABLE incomes ADD COLUMN IF NOT EXISTS tags text;\nALTER TABLE incomes ADD COLUMN IF NOT EXISTS revenue_account_code text DEFAULT '4-40000';\n\nUPDATE incomes SET tags = CASE\n  WHEN channel = 'event'       THEN 'Event; Offline B2C'\n  WHEN channel = 'web'         THEN 'Shopify; Online B2C'\n  WHEN channel = 'wa'          THEN 'WA; Online B2C'\n  WHEN channel = 'dm'          THEN 'DM; Online B2C'\n  WHEN channel = 'shopee'      THEN 'Shopee; Online B2C'\n  WHEN channel = 'tokopedia'   THEN 'Tokopedia; Online B2C'\n  WHEN channel = 'tiktok'      THEN 'TikTok Shop; Online B2C'\n  WHEN channel = 'consignment' THEN 'Consignment'\n  WHEN channel = 'b2b'         THEN 'B2B'\n  ELSE channel\nEND\nWHERE tags IS NULL;`); showToast("✓ Backfill SQL disalin!"); }}
                   style={{ ...s.btn("warning"), marginTop: 8, fontSize: 12, padding: "8px 16px" }}>
                   📋 Copy Backfill SQL
                 </button>
@@ -5024,6 +5010,11 @@ WHERE tags IS NULL;`}
             </div>
           </div>
           <div style={s.content}>
+            {!sbConnected && (
+              <div style={{ background: "#7f1d1d", border: "1px solid #dc2626", borderRadius: 10, padding: "12px 16px", marginBottom: 12, color: "#fca5a5", fontSize: 13, fontWeight: 600 }}>
+                ⚠ Tidak terhubung ke database. Data tidak akan tersimpan. Hubungkan Supabase di tab Pengaturan.
+              </div>
+            )}
             {currentPage ? currentPage() : null}
           </div>
         </div>
