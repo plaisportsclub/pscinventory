@@ -3190,35 +3190,130 @@ function PlaiInventory() {
     showToast(`✓ Settlement CSV: ${refCount} settlement · Total diterima Rp ${totalReceived.toLocaleString("id-ID")} — siap upload ke Jurnal.id`);
   };
 
-  // ── Export Semua: all 5 sheets in one Excel ──
-  const exportKeuanganExcel = () => {
-    const { filteredExp, filteredInc, fmtPayMethod, fromAccCode, expNum, incNum, fmtDate, revenueTag,
-            kasirRevenue, totalIncBySrc, cogsAccounts, opexAccounts, otherAccounts,
-            cogsTotal, opexTotal, otherTotal, totalIncome } = buildExportData();
-    const wb = XLSX.utils.book_new();
-    // Sheet 1: Expense Import
-    const ws1 = XLSX.utils.aoa_to_sheet([["*FromAccountNumber","Beneficiery","Address","*ExpenseDate","*ExpenseNumber","*PaymentMethod","*ExpenseAccount","Description","TaxName","TaxRate","*Amount","#PayLater?(yes/no)","#DueDate","Tags"],...filteredExp.map(e=>[fromAccCode(e.payment_method),e.recipient||"","",fmtDate(e.date),expNum(e),fmtPayMethod(e.payment_method),e.account_code||"",e.description||"","","",e.amount||0,"no","",e.tags||""])]);
-    ws1["!cols"]=[{wch:20},{wch:25},{wch:10},{wch:14},{wch:22},{wch:14},{wch:16},{wch:40},{wch:10},{wch:8},{wch:14},{wch:16},{wch:12},{wch:10}];
-    XLSX.utils.book_append_sheet(wb,ws1,"Expense Import");
-    // Sheet 2: Receive Payment Import
-    const rpIncomes=filteredInc.filter(i=>["marketplace","b2c_direct","consignment","b2b","other"].includes(i.source)||!i.source);
-    const ws2=XLSX.utils.aoa_to_sheet([["*Payment Date","*Payment Number","*Invoice Number","*Pay to account (Code)","*Amount","*PaymentMethod","WitholdingAccountCode","WitholdingAmount(value or %)","Tags(use ; to separate tags)"],...rpIncomes.map(i=>[fmtDate(i.date),incNum(i),i.invoice_number||"",i.pay_to_account_code||fromAccCode(i.payment_method),i.amount||0,fmtPayMethod(i.payment_method),"","",revenueTag(i)])]);
-    ws2["!cols"]=[{wch:14},{wch:22},{wch:18},{wch:22},{wch:14},{wch:14},{wch:22},{wch:24},{wch:20}];
-    XLSX.utils.book_append_sheet(wb,ws2,"Receive Payment Import");
-    // Sheet 3: Raw Expenses
-    const ws3=XLSX.utils.aoa_to_sheet([["Tanggal","No. Expense","From Account","Kode Akun","Nama Akun","Deskripsi","Jumlah","Metode Bayar","Penerima","Tags"],...filteredExp.map(e=>[e.date,expNum(e),fromAccCode(e.payment_method),e.account_code,e.account_name,e.description,e.amount,e.payment_method,e.recipient,e.tags||""])]);
-    ws3["!cols"]=[{wch:12},{wch:22},{wch:14},{wch:12},{wch:28},{wch:35},{wch:14},{wch:12},{wch:20},{wch:14}];
-    XLSX.utils.book_append_sheet(wb,ws3,"Expenses");
-    // Sheet 4: Raw Incomes
-    const ws4=XLSX.utils.aoa_to_sheet([["Tanggal","No. Income","Sumber","Channel","Revenue Account","Tags","Deskripsi","Jumlah","Metode Bayar","Customer","Pay To Account"],...filteredInc.map(i=>[i.date,incNum(i),i.source,i.channel,"4-40000",revenueTag(i),i.description,i.amount,i.payment_method,i.customer,i.pay_to_account_code||fromAccCode(i.payment_method)])]);
-    ws4["!cols"]=[{wch:12},{wch:22},{wch:14},{wch:14},{wch:16},{wch:22},{wch:35},{wch:14},{wch:12},{wch:20},{wch:16}];
-    XLSX.utils.book_append_sheet(wb,ws4,"Incomes");
-    // Sheet 5: P&L
-    const plRows=[["Plai Sports Club"],["Profit & Loss"],[],["PENDAPATAN (REVENUE)"],["Penjualan Kasir (B2C Direct)",kasirRevenue],...Object.entries(totalIncBySrc).map(([k,v])=>[k,v]),["Total Pendapatan",totalIncome],[],["HARGA POKOK PENJUALAN (COGS)"],...cogsAccounts.map(([code,d])=>[`  ${code} ${d.name}`,d.total]),["Total HPP",cogsTotal],[],["LABA KOTOR (GROSS PROFIT)",totalIncome-cogsTotal],[],["BEBAN OPERASIONAL (OPEX)"],...opexAccounts.map(([code,d])=>[`  ${code} ${d.name}`,d.total]),["Total Beban Operasional",opexTotal],[],["LABA OPERASIONAL",totalIncome-cogsTotal-opexTotal],[],  ...(otherAccounts.length>0?[["BEBAN LAINNYA"],...otherAccounts.map(([code,d])=>[`  ${code} ${d.name}`,d.total]),["Total Beban Lainnya",otherTotal],[]]:[]),["LABA / (RUGI) BERSIH",totalIncome-cogsTotal-opexTotal-otherTotal]];
-    const ws5=XLSX.utils.aoa_to_sheet(plRows); ws5["!cols"]=[{wch:35},{wch:18}];
-    XLSX.utils.book_append_sheet(wb,ws5,"P&L");
-    XLSX.writeFile(wb,`Plai_JurnalID_${getPeriodLabel()}_${getDateStr()}.xlsx`);
-    showToast("✓ Full Excel (5 sheets) exported!");
+  // ── Export Sales Invoice CSV — Jurnal.id Sales Invoice format (13 kolom) ──
+  const exportSalesInvoiceCSV = () => {
+    // Source: transactions tipe keluar, exclude kol & pinjam (bukan revenue)
+    const txKeluar = filterByPeriod(
+      transactions.filter(t => t.tipe === "keluar" && !["kol","pinjam"].includes(t.channel)),
+      keuanganPeriod
+    );
+    if (txKeluar.length === 0) {
+      showToast("⚠ Tidak ada transaksi penjualan di periode ini.", "warning");
+      return;
+    }
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const p = String(d).split("-");
+      return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : d;
+    };
+    // Channel label fallback for ContactName
+    const CONTACT_FALLBACK = {
+      wa: "WA Customer", dm: "DM Customer", web: "Web Customer",
+      event: "Event Customer", shopee: "Shopee Customer",
+      tokopedia: "Tokopedia Customer", tiktok: "TikTok Customer",
+      consignment: "Consignment Customer", b2b: "B2B Customer"
+    };
+    const header = "*ContactName,*InvoiceDate,*DueDate,*InvoiceNumber,*AccountCode,*Description,*Quantity,*UnitAmount,TaxName,TaxRate,*SalesAccount,DiscountAmount,Tags";
+    const rows = txKeluar.map(tx => {
+      // Match income by date + channel + description contains product name
+      const matchedIncome = incomes.find(i =>
+        i.date === tx.tanggal &&
+        i.channel === tx.channel &&
+        i.description && i.description.includes(tx.nama) &&
+        i.source_type !== "shipping"
+      );
+      const contactName = (matchedIncome?.customer || "").trim() || CONTACT_FALLBACK[tx.channel] || tx.channel;
+      const invoiceNumber = matchedIncome?.income_number || `TRX-${(tx.tanggal || "").replace(/-/g, "")}-${String(tx.id).slice(-4)}`;
+      const accountCode = matchedIncome?.pay_to_account_code || "1-10002-2";
+      const desc = `${tx.nama} x${tx.jumlah} — ${CHANNEL_LABELS[tx.channel] || tx.channel}`;
+      return [
+        contactName,
+        fmtDate(tx.tanggal),
+        fmtDate(tx.tanggal),
+        invoiceNumber,
+        accountCode,
+        desc,
+        tx.jumlah || 1,
+        tx.harga || 0,
+        "",
+        "",
+        "4-40000",
+        tx.diskon || 0,
+        CHANNEL_TAGS[tx.channel] || ""
+      ];
+    });
+    const csvLines = [header, ...rows.map(r => r.map(c => {
+      const v = String(c ?? "");
+      return v.includes(",") || v.includes('"') || v.includes("\n") ? `"${v.replace(/"/g, '""')}"` : v;
+    }).join(","))];
+    const csv = csvLines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Plai_SalesInvoice_${getPeriodLabel()}_${getDateStr()}.csv`;
+    a.click();
+    showToast(`✓ Sales Invoice CSV: ${txKeluar.length} transaksi — siap upload ke Jurnal.id`);
+  };
+
+  // ── Export Receive Payment CSV — Jurnal.id Receive Payment format (7 kolom) ──
+  const exportReceivePaymentCSV = () => {
+    // Source: incomes yang sudah settled (pending_settlement = false), exclude shipping
+    const settledIncomes = filterByPeriod(
+      incomes.filter(i => i.pending_settlement === false && i.source_type !== "shipping"),
+      keuanganPeriod
+    );
+    if (settledIncomes.length === 0) {
+      showToast("⚠ Tidak ada Receive Payment di periode ini.", "warning");
+      return;
+    }
+    const fmtDate = (d) => {
+      if (!d) return "";
+      const p = String(d).split("-");
+      return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : d;
+    };
+    const CONTACT_FALLBACK = {
+      wa: "WA Customer", dm: "DM Customer", web: "Web Customer",
+      event: "Event Customer", shopee: "Shopee Customer",
+      tokopedia: "Tokopedia Customer", tiktok: "TikTok Customer",
+      consignment: "Consignment Customer", b2b: "B2B Customer"
+    };
+    // Platform mapping for settlement match
+    const platformMap = { shopee: "shopee", tokopedia: "tokopedia", tiktok: "tiktok" };
+    const header = "*ContactName,*InvoiceNumber,*PaymentDate,*Amount,*AccountCode,Reference,Tags";
+    const rows = settledIncomes.map(inc => {
+      const contactName = (inc.customer || "").trim() || CONTACT_FALLBACK[inc.channel] || inc.channel;
+      const invoiceNumber = inc.income_number || `INC-${(inc.date || "").replace(/-/g, "")}-${String(inc.id).slice(-4)}`;
+      // For marketplace: find settlement reference
+      let reference = "";
+      const mktPlatform = platformMap[inc.channel];
+      if (mktPlatform) {
+        const incPeriod = (inc.date || "").substring(0, 7);
+        const matchedSettlement = settlements.find(s =>
+          s.platform === mktPlatform && s.period_label === incPeriod
+        );
+        if (matchedSettlement) reference = matchedSettlement.reference;
+      }
+      return [
+        contactName,
+        invoiceNumber,
+        fmtDate(inc.date),
+        inc.amount || 0,
+        inc.pay_to_account_code || "1-10002-2",
+        reference,
+        inc.tags || ""
+      ];
+    });
+    const csvLines = [header, ...rows.map(r => r.map(c => {
+      const v = String(c ?? "");
+      return v.includes(",") || v.includes('"') || v.includes("\n") ? `"${v.replace(/"/g, '""')}"` : v;
+    }).join(","))];
+    const csv = csvLines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Plai_ReceivePayment_${getPeriodLabel()}_${getDateStr()}.csv`;
+    a.click();
+    showToast(`✓ Receive Payment CSV: ${settledIncomes.length} record — siap upload ke Jurnal.id`);
   };
 
   // Backfill income records: set revenue_account_code=4-40000 + tags from CHANNEL_TAGS
@@ -7170,13 +7265,36 @@ END $$;`;
                   </div>
                 </div>
 
-                {/* Export Semua */}
-                <button onClick={exportKeuanganExcel}
-                  style={{ ...s.btn("primary"), width: "100%", padding: "12px 0", fontSize: 14, fontWeight: 800 }}>
-                  📥 Export Semua (5 Sheet Excel)
-                </button>
-                <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 5, textAlign: "center" }}>
-                  Expense Import · Receive Payment · Expenses · Incomes · P&L
+                {/* Sales Invoice */}
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 12, border: "1px solid #10b98140" }}>
+                  <div style={{ fontWeight: 600, color: "#34d399", marginBottom: 4, fontSize: 12 }}>🧾 Sales Invoice</div>
+                  <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>
+                    Format Jurnal.id Sales Invoice import<br/>
+                    13 kolom · ContactName · InvoiceNumber · SalesAccount 4-40000
+                  </div>
+                  <button onClick={exportSalesInvoiceCSV}
+                    style={{ ...s.btn("primary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700 }}>
+                    🧾 Export Sales Invoice (.csv)
+                  </button>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6 }}>
+                    Dari transaksi keluar (excl. KOL & Pinjam) · Match income untuk customer & invoice number
+                  </div>
+                </div>
+
+                {/* Receive Payment */}
+                <div style={{ background: COLORS.brown, borderRadius: 8, padding: 12, marginBottom: 12, border: "1px solid #10b98140" }}>
+                  <div style={{ fontWeight: 600, color: "#34d399", marginBottom: 4, fontSize: 12 }}>💰 Receive Payment</div>
+                  <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 8 }}>
+                    Format Jurnal.id Receive Payment import<br/>
+                    7 kolom · Match InvoiceNumber ke Sales Invoice · Settlement reference
+                  </div>
+                  <button onClick={exportReceivePaymentCSV}
+                    style={{ ...s.btn("primary"), width: "100%", padding: "10px 0", fontSize: 13, fontWeight: 700 }}>
+                    💰 Export Receive Payment (.csv)
+                  </button>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6 }}>
+                    Incomes settled (excl. shipping) · D2C langsung lunas · Marketplace setelah settlement
+                  </div>
                 </div>
               </div>
 
