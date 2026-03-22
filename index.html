@@ -1180,6 +1180,34 @@ function PlaiInventory() {
     // Remove transaction
     setTransactions(prev => prev.filter(t => t.id !== tx.id));
     sbDeleteTx(tx.id);
+
+    // Clean up related income records (auto-created by handleKeluar)
+    // Match by timestamp proximity (within 5 seconds) + matching description
+    if (tx.tipe === "keluar") {
+      const txId = tx.id;
+      const relatedIncomes = incomes.filter(i => {
+        const timeDiff = Math.abs(i.id - txId);
+        return timeDiff < 5000 && (i.description || "").includes(tx.nama);
+      });
+      if (relatedIncomes.length > 0) {
+        setIncomes(prev => prev.filter(i => !relatedIncomes.find(r => r.id === i.id)));
+        relatedIncomes.forEach(i => deleteIncomeFromDb(i.id));
+      }
+    }
+
+    // Clean up related expense records (shipping expense, KOL expense, waste expense)
+    if (tx.tipe === "keluar" || tx.tipe === "rusak") {
+      const txId = tx.id;
+      const relatedExpenses = expenses.filter(e => {
+        const timeDiff = Math.abs(e.id - txId);
+        return timeDiff < 5000 && (e.description || "").includes(tx.nama);
+      });
+      if (relatedExpenses.length > 0) {
+        setExpenses(prev => prev.filter(e => !relatedExpenses.find(r => r.id === e.id)));
+        relatedExpenses.forEach(e => deleteExpenseFromDb(e.id));
+      }
+    }
+
     setDeleteTxConfirm(null);
     showToast(`✓ Transaksi dihapus — stok ${tx.nama} dikembalikan`);
   };
@@ -2192,7 +2220,7 @@ function PlaiInventory() {
     setPrintItems(itemsWithBarcode);
   };
 
-  // ── AI ───────────────────────────────────────────────────────────────────────
+  // ── AI (local analysis — no API call needed) ─────────────────────────────────
   const sendAiMessage = async () => {
     if (!aiInput.trim() || aiLoading) return;
     const userMsg = aiInput.trim();
@@ -2200,46 +2228,75 @@ function PlaiInventory() {
     setAiMessages(prev => [...prev, { role: "user", content: userMsg }]);
     setAiLoading(true);
 
-    const inventoryContext = JSON.stringify(inventory.slice(0, 50));
-    const transactionContext = JSON.stringify(transactions.slice(0, 20));
-    const pinjamanContext = JSON.stringify(pinjaman);
+    // Local AI: analyze data without API call (Anthropic API doesn't support browser CORS)
+    const q = userMsg.toLowerCase();
+    let reply = "";
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: `Kamu adalah AI assistant untuk sistem inventory Plai Sports Club. Jawab dalam Bahasa Indonesia yang santai dan helpful.
+      const todayStr = new Date().toISOString().split("T")[0];
+      const lowStockItems = inventory.filter(i => !i.discontinued && i.stok <= i.minimum);
+      const outOfStockItems = inventory.filter(i => !i.discontinued && i.stok === 0);
+      const activePinjam = pinjaman.filter(p => !p.kembali);
+      const todayTx = transactions.filter(t => t.tanggal === todayStr);
 
-Data inventory saat ini: ${inventoryContext}
-
-Riwayat transaksi terbaru: ${transactionContext}
-
-Data peminjaman: ${pinjamanContext}
-
-Kamu bisa membantu untuk:
-- Cek stok barang tertentu
-- Info barang yang stoknya rendah
-- Analisis barang paling laku
-- Ringkasan laporan
-- Saran restock
-- Info peminjaman aktif
-
-Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
-          messages: [
-            ...aiMessages.map(m => ({ role: m.role, content: m.content })),
-            { role: "user", content: userMsg }
-          ]
-        })
-      });
-      const data = await res.json();
-      const reply = data.content?.[0]?.text || "Maaf, ada error nih. Coba lagi ya.";
-      setAiMessages(prev => [...prev, { role: "assistant", content: reply }]);
-    } catch {
-      setAiMessages(prev => [...prev, { role: "assistant", content: "Koneksi error. Coba lagi ya!" }]);
+      if (q.includes("stok") && (q.includes("habis") || q.includes("rendah") || q.includes("mau habis") || q.includes("restock"))) {
+        if (lowStockItems.length === 0) {
+          reply = "Semua stok aman! Tidak ada barang yang perlu restock saat ini.";
+        } else {
+          reply = `⚠ ${lowStockItems.length} barang stok rendah:\n\n` +
+            lowStockItems.map(i => `• ${i.nama} — stok: ${i.stok} (min: ${i.minimum})`).join("\n") +
+            (outOfStockItems.length > 0 ? `\n\n🔴 ${outOfStockItems.length} barang habis total:\n` + outOfStockItems.map(i => `• ${i.nama}`).join("\n") : "");
+        }
+      } else if (q.includes("stok") || q.includes("berapa")) {
+        // Search for specific item
+        const searchTerms = q.replace(/stok|berapa|cek|ada|sisa|brp/gi, "").trim();
+        if (searchTerms.length > 1) {
+          const found = inventory.filter(i => !i.discontinued && (i.nama.toLowerCase().includes(searchTerms) || i.sku.toLowerCase().includes(searchTerms)));
+          if (found.length > 0) {
+            reply = found.map(i => `📦 ${i.nama}\n   SKU: ${i.sku} | Stok: ${i.stok} ${i.satuan} | Harga: Rp ${(i.harga||0).toLocaleString("id-ID")}`).join("\n\n");
+          } else {
+            reply = `Tidak ketemu barang "${searchTerms}". Coba keyword lain ya.`;
+          }
+        } else {
+          reply = `Total ${inventory.filter(i=>!i.discontinued).length} produk aktif. Stok rendah: ${lowStockItems.length}. Habis: ${outOfStockItems.length}.`;
+        }
+      } else if (q.includes("laku") || q.includes("terlaris") || q.includes("top") || q.includes("populer")) {
+        const salesMap = {};
+        transactions.filter(t => t.tipe === "keluar").forEach(t => { salesMap[t.sku] = (salesMap[t.sku] || 0) + t.jumlah; });
+        const top5 = Object.entries(salesMap).sort((a,b) => b[1] - a[1]).slice(0, 5);
+        if (top5.length === 0) { reply = "Belum ada data penjualan."; }
+        else {
+          reply = "🔥 Top 5 Barang Terlaris:\n\n" +
+            top5.map(([sku, total], i) => {
+              const item = inventory.find(it => it.sku === sku);
+              return `${i+1}. ${item?.nama || sku} — ${total} unit terjual`;
+            }).join("\n");
+        }
+      } else if (q.includes("laporan") || q.includes("recap") || q.includes("ringkasan") || q.includes("hari ini")) {
+        const masuk = todayTx.filter(t => t.tipe === "masuk").reduce((s,t) => s + t.jumlah, 0);
+        const keluar = todayTx.filter(t => t.tipe === "keluar").reduce((s,t) => s + t.jumlah, 0);
+        const revenue = todayTx.filter(t => t.tipe === "keluar").reduce((s,t) => s + (t.harga||0) * t.jumlah - (t.diskon||0), 0);
+        reply = `📊 Laporan Hari Ini (${todayStr}):\n\n` +
+          `• Transaksi: ${todayTx.length}\n` +
+          `• Barang Masuk: +${masuk} unit\n` +
+          `• Barang Keluar: -${keluar} unit\n` +
+          `• Revenue: Rp ${revenue.toLocaleString("id-ID")}\n` +
+          `• Stok Rendah: ${lowStockItems.length} item\n` +
+          `• Peminjaman Aktif: ${activePinjam.length}`;
+      } else if (q.includes("pinjam") || q.includes("peminjaman")) {
+        if (activePinjam.length === 0) { reply = "Tidak ada peminjaman aktif saat ini."; }
+        else {
+          reply = `⇄ ${activePinjam.length} Peminjaman Aktif:\n\n` +
+            activePinjam.map(p => `• ${p.nama} — ${p.jumlah} pcs — peminjam: ${p.peminjam} — sejak ${p.tanggal}`).join("\n");
+        }
+      } else {
+        reply = "Saya bisa bantu cek:\n• \"stok rendah\" — barang yang perlu restock\n• \"stok [nama barang]\" — cek stok spesifik\n• \"barang terlaris\" — top 5 paling laku\n• \"laporan hari ini\" — ringkasan harian\n• \"peminjaman\" — status peminjaman aktif";
+      }
+    } catch(e) {
+      reply = "Ada error saat memproses. Coba lagi ya!";
     }
+
+    setAiMessages(prev => [...prev, { role: "assistant", content: reply }]);
     setAiLoading(false);
   };
 
@@ -2297,8 +2354,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
   const getStokPct = (item) => item.stok === 0 ? 0 : Math.min(100, (item.stok / (item.minimum * 3)) * 100);
 
   const fmt = (n) => "Rp " + (n || 0).toLocaleString("id-ID");
-  // parseRp: handle Indonesian number format — 10.000 → 10000, 1.500.000 → 1500000
-  const parseRp = (v) => parseInt(String(v || "").replace(/\./g, "").replace(/,/g, "")) || 0;
+  // parseRp: uses module-level definition (line 141)
 
   // ── Keuangan helpers ──
   const JURNAL_ACCOUNTS = [
@@ -2420,6 +2476,26 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     };
     setIncomes(prev => [inc, ...prev]);
     sbInsertIncome(inc);
+
+    // Record consignment fee as expense (6-60002 Commission & Fees)
+    if (feeAmount > 0) {
+      const feeExp = {
+        id: ts + 1,
+        date: consDate,
+        expense_number: `EXP-${dateStr}-FEE-${String(ts+1).slice(-4)}`,
+        from_account_code: "1-10002-2",
+        account_code: "6-60002",
+        account_name: "Commission & Fees",
+        description: `Fee consignment ${consToko} ${fee}%: ${consProduk} x${qty}`,
+        amount: feeAmount,
+        payment_method: "adjustment",
+        recipient: consToko,
+        tags: "Consignment; Commission"
+      };
+      setExpenses(prev => [feeExp, ...prev]);
+      if (sbClient) sbClient.from('expenses').insert([feeExp]);
+    }
+
     showToast("✓ Consignment settlement tersimpan!");
     setConsToko(""); setConsProduk(""); setConsQty("1"); setConsHarga(""); setConsCogs(""); setConsDiskon(""); setConsShipping(""); setConsDate(new Date().toISOString().split("T")[0]); setConsRef("");
   };
@@ -2429,7 +2505,8 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
     const acc = JURNAL_ACCOUNTS.find(a => a.code === expAccount);
     const ts = Date.now();
     const dateStr = expDate.replace(/-/g, "");
-    const payToAccCode = (expPayMethod === "cash" || expPayMethod === "tunai" || expPayMethod === "ewallet") ? "1-10100" : "1-10002-2";
+    const isCashMethod = (m) => ["cash","tunai","ewallet","gopay","ovo","dana","shopeepay"].includes((m||"").toLowerCase());
+    const payToAccCode = isCashMethod(expPayMethod) ? "1-10100" : "1-10002-2";
     const exp = {
       id: ts,
       date: expDate,
@@ -2466,7 +2543,7 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
       amount: parseRp(incAmount) || 0,
       payment_method: incPayMethod,
       customer: incCustomer,
-      pay_to_account_code: (incPayMethod === "cash" || incPayMethod === "tunai") ? "1-10100" : "1-10002-2",
+      pay_to_account_code: ["cash","tunai","ewallet","gopay","ovo","dana","shopeepay"].includes((incPayMethod||"").toLowerCase()) ? "1-10100" : "1-10002-2",
       created_at: new Date().toISOString(),
     };
     setIncomes(prev => [inc, ...prev]);
@@ -4850,10 +4927,11 @@ Jawab dengan singkat, padat, dan informatif. Gunakan emoji secukupnya.`,
                   if (invoiceItems.length === 0) return showToast("Tambah minimal 1 item!", "danger");
                   if (invoiceShipping === "plai" && (!invoiceShipCost || parseRp(invoiceShipCost) <= 0)) return showToast("Isi biaya shipping!", "danger");
                   const invPelangganCost = invoiceShipping === "pelanggan" ? parseRp(invoicePelangganShipCost) || 0 : 0;
-                  invoiceItems.forEach(item => {
+                  invoiceItems.forEach((item, idx) => {
                     const itemData = inventory.find(i => i.sku === item.sku);
                     if (itemData && item.jumlah > itemData.stok) return showToast(`Stok ${item.nama} tidak cukup!`, "danger");
-                    handleKeluar({ sku: item.sku, nama: item.nama, jumlah: item.jumlah, channel: invoiceChannel, shipping: invoiceShipping, shippingCost: invoiceShipping === "plai" ? parseRp(invoiceShipCost) : 0, pelangganShipCost: invPelangganCost, marketplace: false, catatan: invoiceCatatan, staff: invoiceStaff });
+                    // Shipping cost only on first item to avoid double-counting
+                    handleKeluar({ sku: item.sku, nama: item.nama, jumlah: item.jumlah, channel: invoiceChannel, shipping: invoiceShipping, shippingCost: idx === 0 && invoiceShipping === "plai" ? parseRp(invoiceShipCost) : 0, pelangganShipCost: idx === 0 ? invPelangganCost : 0, marketplace: false, catatan: invoiceCatatan, staff: invoiceStaff });
                   });
                   showToast(`✓ Invoice ${invoiceItems.length} item berhasil disimpan`);
                   setInvoiceItems([]);
@@ -5965,14 +6043,17 @@ create table if not exists inventory (
   sku text primary key,
   nama text, kategori text,
   stok int default 0, minimum int default 3,
-  harga int default 0, satuan text default 'pcs',
+  harga int default 0, hpp int default 0,
+  satuan text default 'pcs',
   discontinued boolean default false
 );
 create table if not exists transactions (
   id bigint primary key, tanggal text, sku text, nama text,
   tipe text, jumlah int, harga int default 0, channel text, shipping text,
   "shippingCost" int default 0, "pelangganShipCost" int default 0,
-  marketplace boolean default false, catatan text, staff text
+  marketplace boolean default false, catatan text, staff text,
+  "invoiceId" text, diskon int default 0, hpp_snapshot int default 0,
+  reference_id bigint
 );
 create table if not exists pinjaman (
   id bigint primary key, tanggal text, sku text, nama text,
@@ -5982,15 +6063,42 @@ create table if not exists barcode_map (
   barcode text primary key,
   sku text not null
 );
+create table if not exists expenses (
+  id bigint primary key,
+  date text, expense_number text,
+  from_account_code text, account_code text, account_name text,
+  description text, amount int default 0,
+  payment_method text default 'transfer', recipient text,
+  tags text, created_at timestamptz default now()
+);
+create table if not exists incomes (
+  id bigint primary key,
+  date text, income_number text,
+  source text, source_type text,
+  revenue_account_code text default '4-40000',
+  channel text, tags text,
+  description text, amount int default 0,
+  payment_method text default 'transfer', customer text,
+  pay_to_account_code text, invoice_number text,
+  cogs int default 0, gross_revenue int default 0, fee_amount int default 0,
+  created_at timestamptz default now()
+);
 alter table inventory disable row level security;
 alter table transactions disable row level security;
 alter table pinjaman disable row level security;
 alter table barcode_map disable row level security;
+alter table expenses disable row level security;
+alter table incomes disable row level security;
 
 -- Migration: tambah kolom baru (aman dijalankan ulang)
 DO $$ BEGIN
+  ALTER TABLE inventory ADD COLUMN IF NOT EXISTS hpp int DEFAULT 0;
   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS "pelangganShipCost" int DEFAULT 0;
   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS marketplace boolean DEFAULT false;
+  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS "invoiceId" text;
+  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS diskon int DEFAULT 0;
+  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS hpp_snapshot int DEFAULT 0;
+  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS reference_id bigint;
 EXCEPTION WHEN others THEN NULL;
 END $$;`;
 
@@ -6436,7 +6544,7 @@ END $$;`;
       const kasirRev = filterByPeriod(
         transactions.filter(t => t.tipe === "keluar" && kasirChs.includes(t.channel)),
         keuanganPeriod
-      ).reduce((sum, t) => sum + (t.jumlah * t.harga), 0);
+      ).reduce((sum, t) => sum + (t.jumlah * t.harga - (t.diskon || 0)), 0);
       const totalRevenue = kasirRev + totalInc;
 
       const subTabs = [
