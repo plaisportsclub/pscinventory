@@ -661,6 +661,7 @@ function PlaiInventory() {
 
   // ── Settlement Marketplace state ──
   const [settlements, setSettlements] = useState([]);
+  const [revenueRange, setRevenueRange] = useState("7hari"); // "7hari" | "bulan"
   const [settlementPlatform, setSettlementPlatform] = useState("semua");
   const [settlementPeriod, setSettlementPeriod] = useState("");
   const [showSettlementForm, setShowSettlementForm] = useState(false);
@@ -3488,91 +3489,326 @@ function PlaiInventory() {
       );
     },
     dashboard: () => {
-      const ch = channelStats();
-      const top = topKeluar();
+      const today = new Date().toISOString().split("T")[0];
+      const thisMonth = today.substring(0, 7);
+
+      // ── Card 1: Total Stok Aktif ──
+      const activeItems = inventory.filter(i => i.stok > 0 && !i.discontinued);
+      const activeStokValue = activeItems.reduce((sum, i) => sum + (i.stok * (i.hpp || 0)), 0);
+
+      // ── Card 2: Transaksi Hari Ini ──
+      const txToday = transactions.filter(t => t.tanggal === today);
+      const revenueToday = incomes.filter(i => i.date === today).reduce((sum, i) => sum + (i.amount || 0), 0)
+        + transactions.filter(t => t.tipe === "keluar" && t.tanggal === today && ["wa","dm","web","event","terjual","direct"].includes(t.channel))
+          .reduce((sum, t) => sum + (t.jumlah * t.harga - (t.diskon || 0)), 0);
+
+      // ── Card 3: Stok Hampir Habis ──
+      const lowStockActive = inventory.filter(i => !i.discontinued && i.stok > 0 && i.stok <= i.minimum);
+
+      // ── Card 4: A/R Belum Settled ──
+      const arPending = incomes.filter(i => i.pending_settlement === true);
+      const arTotal = arPending.reduce((sum, i) => sum + (i.amount || 0), 0);
+
+      // ── Revenue per Channel ──
+      const revFilteredTx = (() => {
+        const now = new Date();
+        if (revenueRange === "7hari") {
+          const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
+          return transactions.filter(t => t.tipe === "keluar" && new Date(t.tanggal) >= weekAgo);
+        }
+        return transactions.filter(t => t.tipe === "keluar" && t.tanggal && t.tanggal.substring(0, 7) === thisMonth);
+      })();
+
+      const channelGroups = [
+        { label: "WA / DM", channels: ["wa", "dm"] },
+        { label: "Shopee", channels: ["shopee"] },
+        { label: "Web", channels: ["web"] },
+        { label: "TikTok", channels: ["tiktok", "tokopedia"] },
+        { label: "Event / Walk-in", channels: ["event", "terjual", "direct"] },
+        { label: "B2B / Consignment", channels: ["b2b", "consignment"] },
+      ];
+      const channelRevenue = channelGroups.map(g => ({
+        label: g.label,
+        revenue: revFilteredTx.filter(t => g.channels.includes(t.channel))
+          .reduce((sum, t) => sum + (t.jumlah * t.harga - (t.diskon || 0)), 0),
+      })).sort((a, b) => b.revenue - a.revenue);
+      const maxRevenue = Math.max(1, ...channelRevenue.map(c => c.revenue));
+
+      // ── Top 5 Produk Terlaris Bulan Ini ──
+      const txBulanIni = transactions.filter(t => t.tipe === "keluar" && t.tanggal && t.tanggal.substring(0, 7) === thisMonth);
+      const skuMap = {};
+      txBulanIni.forEach(t => { skuMap[t.sku] = (skuMap[t.sku] || 0) + t.jumlah; });
+      const top5 = Object.entries(skuMap).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([sku, qty], idx) => {
+        const item = inventory.find(i => i.sku === sku);
+        return { sku, nama: item?.nama || sku, qty, rank: idx };
+      });
+
       return (
         <div>
-          <div style={{ ...s.grid4, marginBottom: 20 }}>
-            {[
-              { label: "Total Item", val: inventory.length, color: COLORS.aqua },
-              { label: "Stok Rendah", val: lowStock.length, color: COLORS.warning },
-              { label: "Habis", val: outOfStock.length, color: COLORS.danger },
-              { label: "Transaksi Hari Ini", val: transactions.filter(t => t.tanggal === new Date().toISOString().split("T")[0]).length, color: COLORS.success },
-            ].map((s2, i) => (
-              <div key={i} style={s.card}>
-                <div style={s.cardTitle}>{s2.label}</div>
-                <div style={{ ...s.statNum, color: s2.color }}>{s2.val}</div>
-              </div>
-            ))}
+          {/* ═══ SECTION A — 4 Metric Cards ═══ */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 }}>
+            {/* Card 1: Total Stok Aktif */}
+            <div style={s.card}>
+              <div style={s.cardTitle}>Total Stok Aktif</div>
+              <div style={{ ...s.statNum, color: COLORS.aqua }}>{activeItems.length}</div>
+              <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 4 }}>nilai {fmt(activeStokValue)}</div>
+            </div>
+            {/* Card 2: Transaksi Hari Ini */}
+            <div style={s.card}>
+              <div style={s.cardTitle}>Transaksi Hari Ini</div>
+              <div style={{ ...s.statNum, color: COLORS.success }}>{txToday.length}</div>
+              <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 4 }}>{fmt(revenueToday)} revenue</div>
+            </div>
+            {/* Card 3: Stok Hampir Habis */}
+            <div style={{ ...s.card, borderColor: lowStockActive.length > 0 ? COLORS.warning + "80" : COLORS.success + "40" }}>
+              <div style={s.cardTitle}>Stok Hampir Habis</div>
+              <div style={{ ...s.statNum, color: lowStockActive.length > 0 ? COLORS.warning : COLORS.success }}>{lowStockActive.length}</div>
+              <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 4 }}>SKU di bawah stok minimum</div>
+            </div>
+            {/* Card 4: A/R Belum Settled */}
+            <div style={{ ...s.card, borderColor: arTotal > 0 ? COLORS.warning + "80" : COLORS.success + "40" }}>
+              <div style={s.cardTitle}>A/R Belum Settled</div>
+              <div style={{ ...s.statNum, fontSize: 24, color: arTotal > 0 ? COLORS.warning : COLORS.success }}>{fmt(arTotal)}</div>
+              <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 4 }}>marketplace belum cair</div>
+            </div>
           </div>
 
-          <div style={s.grid2}>
-            <div>
-              <div style={{ ...s.card, marginBottom: 16 }}>
-                <div style={s.cardTitle}>⚠ Stok Perlu Restock</div>
-                {lowStock.length === 0 ? <div style={{ color: COLORS.success, fontSize: 13 }}>Semua stok aman ✓</div> :
-                  lowStock.map(item => (
-                    <div key={item.sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${COLORS.brownLight}20` }}>
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 500 }}>{item.nama}</div>
-                        <div style={s.skuBadge}>{item.sku}</div>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ color: getStokColor(item), fontWeight: 700, fontSize: 16 }}>{item.stok}</div>
-                        <div style={{ fontSize: 11, color: COLORS.textMuted }}>min {item.minimum}</div>
-                      </div>
-                    </div>
-                  ))
-                }
+          {/* ═══ SECTION B — 2 Kolom: Revenue + Top 5 ═══ */}
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16, marginBottom: 20 }}>
+            {/* Kolom Kiri: Revenue per Channel */}
+            <div style={s.card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={s.cardTitle}>Revenue per Channel</div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[["7hari", "7 Hari"], ["bulan", "Bulan Ini"]].map(([id, lbl]) => (
+                    <button key={id} onClick={() => setRevenueRange(id)}
+                      style={{ padding: "4px 10px", fontSize: 10, fontWeight: revenueRange === id ? 700 : 400,
+                        background: revenueRange === id ? COLORS.aqua : "transparent",
+                        color: revenueRange === id ? COLORS.brownDark : COLORS.textMuted,
+                        border: `1px solid ${revenueRange === id ? COLORS.aqua : COLORS.brownLight}`,
+                        borderRadius: 12, cursor: "pointer" }}>
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div style={s.card}>
-                <div style={s.cardTitle}>📊 Channel Distribusi</div>
-                {[["🛒 Kasir (B2C)", ch.kasir, COLORS.aqua], ["🏪 Marketplace/B2B", ch.marketplace, COLORS.success], ["📱 KOL", ch.kol, COLORS.warning]].map(([lbl, val, color]) => (
-                  <div key={lbl} style={{ marginBottom: 12 }}>
+              {channelRevenue.filter(c => c.revenue > 0).length === 0
+                ? <div style={{ fontSize: 13, color: COLORS.textMuted }}>Belum ada revenue periode ini</div>
+                : channelRevenue.map(c => (
+                  <div key={c.label} style={{ marginBottom: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
-                      <span>{lbl}</span><span style={{ color, fontWeight: 700 }}>{val} unit</span>
+                      <span style={{ color: COLORS.cream }}>{c.label}</span>
+                      <span style={{ color: COLORS.aqua, fontWeight: 700 }}>{fmt(c.revenue)}</span>
                     </div>
                     <div style={s.progressBar()}>
-                      <div style={s.progressFill(val / Math.max(1, ch.kasir + ch.marketplace + ch.kol) * 100, color)} />
+                      <div style={s.progressFill((c.revenue / maxRevenue) * 100, COLORS.aqua)} />
                     </div>
                   </div>
-                ))}
-              </div>
+                ))
+              }
             </div>
 
-            <div>
-              <div style={s.card}>
-                <div style={s.cardTitle}>🔥 Barang Paling Laku</div>
-                {top.length === 0 ? <div style={{ color: COLORS.textMuted, fontSize: 13 }}>Belum ada data transaksi</div> :
-                  top.map((item, i) => (
-                    <div key={item.sku} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: `1px solid ${COLORS.brownLight}20` }}>
-                      <div style={{ width: 24, height: 24, borderRadius: "50%", background: i === 0 ? COLORS.aqua : COLORS.brownLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: i === 0 ? COLORS.brownDark : COLORS.textMuted, flexShrink: 0 }}>{i + 1}</div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500 }}>{item.nama}</div>
-                        <div style={s.progressBar()}><div style={s.progressFill((item.total / top[0].total) * 100, COLORS.aqua)} /></div>
-                      </div>
-                      <div style={{ color: COLORS.aqua, fontWeight: 700, fontSize: 16 }}>{item.total}</div>
+            {/* Kolom Kanan: Top 5 Produk Terlaris Bulan Ini */}
+            <div style={s.card}>
+              <div style={s.cardTitle}>Top 5 Terlaris Bulan Ini</div>
+              {top5.length === 0
+                ? <div style={{ fontSize: 13, color: COLORS.textMuted }}>Belum ada transaksi bulan ini</div>
+                : top5.map(item => (
+                  <div key={item.sku} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${COLORS.brownLight}20` }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: COLORS.cream }}>{item.nama}</div>
+                      <div style={{ fontSize: 10, color: COLORS.textMuted }}>{item.sku}</div>
                     </div>
-                  ))
-                }
-              </div>
-              <div style={{ ...s.card, marginTop: 16 }}>
-                <div style={s.cardTitle}>⇄ Peminjaman Aktif</div>
-                {pinjaman.filter(p => !p.kembali).length === 0
-                  ? <div style={{ color: COLORS.textMuted, fontSize: 13 }}>Tidak ada peminjaman aktif</div>
-                  : pinjaman.filter(p => !p.kembali).map(p => (
-                    <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${COLORS.brownLight}20`, fontSize: 13 }}>
-                      <div>
-                        <div style={{ fontWeight: 500 }}>{p.nama}</div>
-                        <div style={{ color: COLORS.textMuted, fontSize: 11 }}>{p.peminjam} · {p.tanggal}</div>
-                      </div>
-                      <div style={{ color: COLORS.warning, fontWeight: 600 }}>{p.jumlah} pcs</div>
-                    </div>
-                  ))
-                }
-              </div>
+                    <span style={{
+                      ...s.badge(item.rank < 2 ? COLORS.success : item.rank < 4 ? COLORS.aqua : COLORS.textMuted),
+                      color: item.rank < 4 ? COLORS.brownDark : COLORS.cream,
+                      fontSize: 12, fontWeight: 700, minWidth: 40, textAlign: "center"
+                    }}>{item.qty} pcs</span>
+                  </div>
+                ))
+              }
             </div>
           </div>
+
+          {/* ═══ SECTION C — 3 Kolom: Produksi, Expense, Bahan Baku ═══ */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
+
+            {/* Kolom 1: Produksi Berjalan */}
+            <div style={s.card}>
+              <div style={s.cardTitle}>Produksi Berjalan</div>
+              {(() => {
+                const activePurchases = purchases.filter(p => p.status === "dp_paid" || p.status === "paid");
+                return activePurchases.length === 0
+                  ? <div style={{ fontSize: 13, color: COLORS.textMuted }}>Tidak ada produksi berjalan saat ini</div>
+                  : activePurchases.map(p => (
+                    <div key={p.id} style={{ padding: "8px 0", borderBottom: `1px solid ${COLORS.brownLight}20` }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: COLORS.cream }}>{p.vendor}</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                        <span style={{ fontSize: 11, color: COLORS.textMuted }}>
+                          {p.qty ? `${p.qty} pcs` : ""}{p.qty && p.date ? " · " : ""}{p.date || ""}
+                        </span>
+                        <span style={{
+                          background: p.status === "paid" ? COLORS.success + "30" : COLORS.warning + "30",
+                          color: p.status === "paid" ? COLORS.success : COLORS.warning,
+                          padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600
+                        }}>{p.status}</span>
+                      </div>
+                    </div>
+                  ));
+              })()}
+            </div>
+
+            {/* Kolom 2: Expense Bulan Ini per Kategori */}
+            <div style={s.card}>
+              <div style={s.cardTitle}>Expense Bulan Ini</div>
+              {(() => {
+                const expThisMonth = expenses.filter(e => e.date && e.date.substring(0, 7) === thisMonth);
+                const expGroups = { "Advertising": 0, "Wages": 0, "Shipping": 0, "Other": 0 };
+                expThisMonth.forEach(e => {
+                  const code = e.account_code || "";
+                  if (code.startsWith("6-60001")) expGroups["Advertising"] += e.amount || 0;
+                  else if (code.startsWith("6-60102")) expGroups["Wages"] += e.amount || 0;
+                  else if (code.startsWith("5-50300")) expGroups["Shipping"] += e.amount || 0;
+                  else expGroups["Other"] += e.amount || 0;
+                });
+                const expTotal = Object.values(expGroups).reduce((a, b) => a + b, 0);
+                const unverifiedCount = expThisMonth.filter(e => e.verified === false || !e.verified).length;
+                return (
+                  <div>
+                    {Object.entries(expGroups).filter(([, v]) => v > 0).map(([cat, val]) => (
+                      <div key={cat} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12 }}>
+                        <span style={{ color: COLORS.cream }}>{cat}</span>
+                        <span style={{ color: COLORS.textMuted, fontWeight: 600 }}>{fmt(val)}</span>
+                      </div>
+                    ))}
+                    {expTotal > 0 && (
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", marginTop: 4, borderTop: `1px solid ${COLORS.brownLight}`, fontSize: 13, fontWeight: 700 }}>
+                        <span style={{ color: COLORS.cream }}>Total</span>
+                        <span style={{ color: COLORS.danger }}>{fmt(expTotal)}</span>
+                      </div>
+                    )}
+                    {expTotal === 0 && <div style={{ fontSize: 13, color: COLORS.textMuted }}>Belum ada expense bulan ini</div>}
+                    {unverifiedCount > 0 && (
+                      <div style={{ marginTop: 8, padding: "4px 8px", background: COLORS.warning + "15", borderRadius: 6, fontSize: 11, color: COLORS.warning }}>
+                        ⚠ {unverifiedCount} belum diverifikasi
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Kolom 3: Stok Bahan Baku */}
+            <div style={s.card}>
+              <div style={s.cardTitle}>Stok Bahan Baku</div>
+              {(() => {
+                if (rawMaterials.length === 0) return <div style={{ fontSize: 13, color: COLORS.textMuted }}>Belum ada data bahan baku</div>;
+                const rmGroups = {};
+                rawMaterials.forEach(rm => {
+                  const kat = rm.kategori || "lainnya";
+                  if (!rmGroups[kat]) rmGroups[kat] = { items: [], totalQty: 0, satuan: rm.satuan || "pcs", maxQty: 0 };
+                  rmGroups[kat].items.push(rm);
+                  rmGroups[kat].totalQty += rm.stok_qty || 0;
+                  if ((rm.stok_qty || 0) > rmGroups[kat].maxQty) rmGroups[kat].maxQty = rm.stok_qty || 0;
+                });
+                const lowRmWarning = rawMaterials.filter(rm => {
+                  const qty = rm.stok_qty || 0;
+                  const sat = (rm.satuan || "").toLowerCase();
+                  return (sat === "yard" && qty < 20) || (sat !== "yard" && qty < 50);
+                });
+                return (
+                  <div>
+                    {Object.entries(rmGroups).map(([kat, g]) => (
+                      <div key={kat} style={{ marginBottom: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                          <span style={{ color: COLORS.cream, textTransform: "capitalize" }}>{kat}</span>
+                          <span style={{ color: COLORS.aqua, fontWeight: 600 }}>{g.totalQty} {g.satuan}</span>
+                        </div>
+                        <div style={s.progressBar()}>
+                          <div style={s.progressFill(g.maxQty > 0 ? (g.totalQty / (g.maxQty * g.items.length)) * 100 : 0, COLORS.aqua)} />
+                        </div>
+                      </div>
+                    ))}
+                    {lowRmWarning.length > 0 && (
+                      <div style={{ marginTop: 8, padding: "4px 8px", background: COLORS.danger + "15", borderRadius: 6, fontSize: 11, color: COLORS.danger }}>
+                        ⚠ {lowRmWarning.length} bahan baku hampir habis
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* ═══ SECTION D — Banner "Perlu Perhatian" ═══ */}
+          {(() => {
+            const now = new Date();
+            const daysAgo = (dateStr, n) => { const d = new Date(dateStr); const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - n); return d <= cutoff; };
+
+            const warnings = [];
+
+            // 1. Stok hampir habis
+            const lowStockWarn = inventory.filter(i => !i.discontinued && i.stok > 0 && i.stok <= i.minimum);
+            if (lowStockWarn.length > 0) warnings.push({
+              label: `${lowStockWarn.length} SKU stok hampir habis`,
+              color: COLORS.warning,
+              action: () => setPage("stok"),
+            });
+
+            // 2. Expense belum diverifikasi > 3 hari
+            const unverifiedExp = expenses.filter(e => (!e.verified) && e.date && daysAgo(e.date, 3));
+            if (unverifiedExp.length > 0) warnings.push({
+              label: `${unverifiedExp.length} expense belum diverifikasi`,
+              color: COLORS.warning,
+              action: () => { setPage("keuangan"); setKeuanganTab("expense"); setExpSourceFilter("unverified"); },
+            });
+
+            // 3. A/R marketplace > 14 hari
+            const arOld = incomes.filter(i => i.pending_settlement === true && i.date && daysAgo(i.date, 14));
+            const arOldTotal = arOld.reduce((sum, i) => sum + (i.amount || 0), 0);
+            if (arOld.length > 0) warnings.push({
+              label: `A/R ${fmt(arOldTotal)} belum settled >14 hari`,
+              color: COLORS.danger,
+              action: () => setPage("settlement"),
+            });
+
+            // 4. Purchase belum received > 7 hari
+            const purchaseLate = purchases.filter(p => (p.status === "dp_paid" || p.status === "paid") && p.date && daysAgo(p.date, 7));
+            if (purchaseLate.length > 0) warnings.push({
+              label: `${purchaseLate.length} purchase belum received >7 hari`,
+              color: COLORS.warning,
+              action: () => setPage("masuk"),
+            });
+
+            // 5. Raw material < threshold
+            const lowRm = rawMaterials.filter(rm => {
+              const qty = rm.stok_qty || 0;
+              const sat = (rm.satuan || "").toLowerCase();
+              return (sat === "yard" && qty < 20) || (sat !== "yard" && qty < 50);
+            });
+            if (lowRm.length > 0) warnings.push({
+              label: `${lowRm.length} bahan baku hampir habis`,
+              color: COLORS.danger,
+              action: () => { setPage("produksi"); setProduksiTab("bahan_baku"); },
+            });
+
+            if (warnings.length === 0) return null;
+            return (
+              <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: "14px 16px", border: `1px solid ${COLORS.warning}40` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.warning, marginBottom: 10, letterSpacing: 1 }}>⚠ PERLU PERHATIAN</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {warnings.map((w, i) => (
+                    <button key={i} onClick={w.action}
+                      style={{ background: w.color + "20", color: w.color, border: `1px solid ${w.color}40`,
+                        borderRadius: 20, padding: "6px 14px", fontSize: 11, fontWeight: 600,
+                        cursor: "pointer", transition: "all 0.2s", whiteSpace: "nowrap" }}>
+                      {w.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       );
     },
@@ -6549,7 +6785,6 @@ END $$;`;
 
       const subTabs = [
         { id: "expense", label: "Pengeluaran", icon: "📤" },
-        { id: "income", label: "Pemasukan", icon: "📥" },
         { id: "summary", label: "Ringkasan", icon: "📊" },
         { id: "export", label: "Export", icon: "📁" },
       ];
@@ -6729,257 +6964,34 @@ END $$;`;
             </div>
           )}
 
-          {/* ── INCOME TAB ── */}
-          {keuanganTab === "income" && (
-            <div>
-              {/* Sub-type selector */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                {[["marketplace","🛒 Marketplace Settlement"],["consignment","🏪 Consignment"],["other","💵 Lainnya"]].map(([id, lbl]) => (
-                  <button key={id} onClick={() => setIncSubType(id)}
-                    style={{ ...s.btn(incSubType === id ? "primary" : "secondary"), flex: 1, fontSize: 11, padding: "8px 4px" }}>{lbl}</button>
-                ))}
-              </div>
-
-              {/* MARKETPLACE SETTLEMENT FORM */}
-              {incSubType === "marketplace" && (
-                <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.aquaDark}` }}>
-                  <h3 style={{ color: COLORS.aqua, marginBottom: 4, fontSize: 14 }}>🛒 Marketplace Settlement</h3>
-                  <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 12 }}>Catat saat uang settlement dari platform cair ke rekening. Stok sudah tercatat di Barang Keluar.</p>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Platform</label>
-                      <select value={mktSettlePlatform} onChange={e => setMktSettlePlatform(e.target.value)} style={{ ...s.input, width: "100%" }}>
-                        <option>Shopee</option><option>Tokopedia</option><option>TikTok Shop</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Tanggal Cair</label>
-                      <input type="date" value={mktSettleDate} onChange={e => setMktSettleDate(e.target.value)} style={{ ...s.input, width: "100%" }} />
-                    </div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Jumlah Settlement (Rp) *</label>
-                      <input type="number" value={mktSettleAmount} onChange={e => setMktSettleAmount(e.target.value)} placeholder="Nominal yang masuk ke rekening" style={{ ...s.input, width: "100%" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>No. Disbursement / Referensi</label>
-                      <input type="text" value={mktSettleRef} onChange={e => setMktSettleRef(e.target.value)} placeholder="cth: DISB-20260318-xxx" style={{ ...s.input, width: "100%" }} />
-                    </div>
-                  </div>
-                  <div style={{ marginBottom: 10 }}>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Catatan (opsional)</label>
-                    <input type="text" value={mktSettleNotes} onChange={e => setMktSettleNotes(e.target.value)} placeholder="cth: Settlement minggu 10-16 Maret" style={{ ...s.input, width: "100%" }} />
-                  </div>
-                  <button onClick={addMarketplaceSettlement} style={{ ...s.btn("primary"), width: "100%", padding: "11px 0", fontWeight: 700 }}>+ Simpan Settlement</button>
-                </div>
-              )}
-
-              {/* CONSIGNMENT SETTLEMENT FORM */}
-              {incSubType === "consignment" && (
-                <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.brownLight}` }}>
-                  <h3 style={{ color: COLORS.aqua, marginBottom: 4, fontSize: 14 }}>🏪 Consignment Settlement</h3>
-                  <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 12 }}>Catat laporan penjualan dari toko consignment.</p>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Nama Toko *</label>
-                      <input type="text" value={consToko} onChange={e => setConsToko(e.target.value)} placeholder="cth: Hotel Tentrem" style={{ ...s.input, width: "100%" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Tanggal Laporan</label>
-                      <input type="date" value={consDate} onChange={e => setConsDate(e.target.value)} style={{ ...s.input, width: "100%" }} />
-                    </div>
-                  </div>
-                  <div style={{ marginBottom: 8 }}>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>🔗 No. Referensi Konsinyasi <span style={{ color: COLORS.textMuted, fontStyle: "italic" }}>(opsional)</span></label>
-                    <input type="text" value={consRef} onChange={e => setConsRef(e.target.value)} placeholder="Isi no. invoice pengiriman barang ke toko (dari Tab Barang Keluar)" style={{ ...s.input, width: "100%" }} />
-                    <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Sebagai referensi untuk mencocokkan dengan catatan pengiriman</div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8, marginBottom: 8 }}>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Nama Produk *</label>
-                      <input type="text" value={consProduk} onChange={e => setConsProduk(e.target.value)} placeholder="cth: Jersey Home XL" style={{ ...s.input, width: "100%" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Qty</label>
-                      <input type="number" min="1" value={consQty} onChange={e => setConsQty(e.target.value)} style={{ ...s.input, width: "100%" }} />
-                    </div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Harga Jual / pcs (Rp) *</label>
-                      <input type="number" value={consHarga} onChange={e => setConsHarga(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>COGS / pcs (Rp)</label>
-                      <input type="number" value={consCogs} onChange={e => setConsCogs(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} />
-                    </div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Diskon (Rp)</label>
-                      <input type="number" value={consDiskon} onChange={e => setConsDiskon(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Shipping (Rp)</label>
-                      <input type="number" value={consShipping} onChange={e => setConsShipping(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Fee Consignment (%)</label>
-                      <input type="number" value={consFee} onChange={e => setConsFee(e.target.value)} placeholder="22.5" style={{ ...s.input, width: "100%" }} />
-                    </div>
-                  </div>
-                  {consHarga && consQty && (
-                    <div style={{ background: COLORS.brown, borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 11 }}>
-                      {(() => {
-                        const gross = (parseRp(consHarga)||0) * (parseInt(consQty)||1) - (parseRp(consDiskon)||0) + (parseRp(consShipping)||0);
-                        const fee = Math.round((parseRp(consHarga)||0) * (parseInt(consQty)||1) * (parseFloat(consFee)||22.5) / 100);
-                        const net = gross - fee;
-                        return <>
-                          Gross: <span style={{ color: COLORS.cream }}>Rp {gross.toLocaleString("id-ID")}</span>
-                          {" · "}Fee {consFee}%: <span style={{ color: COLORS.danger }}>-Rp {fee.toLocaleString("id-ID")}</span>
-                          {" · "}Net: <span style={{ color: COLORS.success, fontWeight: 700 }}>Rp {net.toLocaleString("id-ID")}</span>
-                        </>;
-                      })()}
-                    </div>
-                  )}
-                  <button onClick={addConsignmentSettlement} style={{ ...s.btn("primary"), width: "100%", padding: "11px 0", fontWeight: 700 }}>+ Simpan Consignment</button>
-                </div>
-              )}
-
-              {/* LAINNYA FORM (B2B manual / other) */}
-              {incSubType === "other" && (
-                <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.brownLight}` }}>
-                  <h3 style={{ color: COLORS.aqua, marginBottom: 4, fontSize: 14 }}>💵 Pemasukan Lainnya</h3>
-                  <p style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 12 }}>Untuk B2B payment, refund masuk, atau pemasukan lain yang tidak ada di kategori lain.</p>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <div><label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Tanggal</label>
-                      <input type="date" value={incDate} onChange={e => setIncDate(e.target.value)} style={{ ...s.input, width: "100%" }} /></div>
-                    <div><label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Jumlah (Rp)</label>
-                      <input type="number" value={incAmount} onChange={e => setIncAmount(e.target.value)} placeholder="0" style={{ ...s.input, width: "100%" }} /></div>
-                  </div>
-                  <div style={{ marginTop: 10 }}>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Sumber</label>
-                    <select value={incSource} onChange={e => setIncSource(e.target.value)} style={{ ...s.input, width: "100%" }}>
-                      <option value="b2b">B2B</option><option value="other">Lainnya / Refund</option>
-                    </select>
-                  </div>
-                  <div style={{ marginTop: 10 }}>
-                    <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Deskripsi / Nama Customer</label>
-                    <input type="text" value={incDesc} onChange={e => setIncDesc(e.target.value)} placeholder="cth: B2B PT Maju Jaya — Invoice INV-001" style={{ ...s.input, width: "100%" }} />
-                  </div>
-                  <button onClick={addIncome} style={{ ...s.btn("primary"), width: "100%", marginTop: 12, padding: "11px 0", fontWeight: 700 }}>+ Simpan Pemasukan</button>
-                </div>
-              )}
-
-              {/* Income list */}
-              <h3 style={{ color: COLORS.cream, marginBottom: 8, fontSize: 14 }}>Riwayat Pemasukan Non-Kasir ({filteredIncomes.length})</h3>
-              <div style={{ background: COLORS.brownDark+"80", borderRadius: 10, padding: 10, marginBottom: 12, border: `1px dashed ${COLORS.brownLight}` }}>
-                <div style={{ fontSize: 11, color: COLORS.textMuted }}>💡 Penjualan via Kasir (periode ini):</div>
-                <div style={{ fontWeight: 700, color: COLORS.success, fontSize: 14 }}>{fmt(kasirRev)}</div>
-              </div>
-              {filteredIncomes.length === 0 && <div style={{ color: COLORS.textMuted, fontSize: 13, textAlign: "center", padding: 30 }}>Belum ada data pemasukan non-kasir</div>}
-              {filteredIncomes.map(inc => (
-                <div key={inc.id} style={{ background: COLORS.brownDark, borderRadius: 10, padding: 12, marginBottom: 8, border: `1px solid ${COLORS.brownLight}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: COLORS.cream }}>
-                      {inc.source === "marketplace" ? "🛒" : inc.source === "consignment" ? "🏪" : inc.source === "b2b" ? "🏢" : "💵"} {inc.source}{inc.channel ? ` — ${inc.channel}` : ""}
-                    </div>
-                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>{inc.date} · {inc.description || "-"}{inc.customer ? ` · ${inc.customer}` : ""}</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontWeight: 700, color: COLORS.success, fontSize: 14 }}>+{fmt(inc.amount)}</div>
-                    <button onClick={() => deleteIncome(inc.id)}
-                      style={{ background: "transparent", border: "none", color: COLORS.textMuted, fontSize: 10, cursor: "pointer", marginTop: 2 }}>hapus</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* ── INCOME TAB removed — fungsi addIncome/deleteIncome/addMarketplaceSettlement/addConsignmentSettlement tetap ada secara internal ── */}
 
           {/* ── SUMMARY TAB ── */}
           {keuanganTab === "summary" && (() => {
-            const byAccount = {};
-            filteredExpenses.forEach(e => {
-              if (!byAccount[e.account_code]) byAccount[e.account_code] = { name: e.account_name, total: 0, count: 0 };
-              byAccount[e.account_code].total += e.amount;
-              byAccount[e.account_code].count++;
-            });
-            const cogsTotal = filteredExpenses.filter(e => e.account_code.startsWith("5-")).reduce((s, e) => s + e.amount, 0);
-            const opexTotal = filteredExpenses.filter(e => e.account_code.startsWith("6-")).reduce((s, e) => s + e.amount, 0);
-            const otherExpTotal = filteredExpenses.filter(e => e.account_code.startsWith("8-")).reduce((s, e) => s + e.amount, 0);
-            const incBySrc = {};
-            filteredIncomes.forEach(i => {
-              const key = i.source;
-              if (!incBySrc[key]) incBySrc[key] = 0;
-              incBySrc[key] += i.amount;
-            });
-            const grossProfit = totalRevenue - cogsTotal;
-            const operatingProfit = grossProfit - opexTotal;
-            const netProfit = operatingProfit - otherExpTotal;
+            const cogsTotal = filteredExpenses.filter(e => (e.account_code || "").startsWith("5-")).reduce((s, e) => s + e.amount, 0);
+            const arOutstanding = incomes.filter(i => i.pending_settlement === true).reduce((s, i) => s + (i.amount || 0), 0);
 
             return (
               <div>
-                <h3 style={{ color: COLORS.aqua, marginBottom: 12, fontSize: 15 }}>📊 Ringkasan P&L</h3>
+                <h3 style={{ color: COLORS.aqua, marginBottom: 12, fontSize: 15 }}>📊 Ringkasan Periode</h3>
 
                 <div style={{ background: COLORS.brownDark, borderRadius: 12, padding: 16, marginBottom: 16, border: `1px solid ${COLORS.brownLight}` }}>
-                  {/* Revenue */}
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.aqua, marginBottom: 6, letterSpacing: 1 }}>PENDAPATAN</div>
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13, color: COLORS.cream }}>
-                      <span>Penjualan (Kasir)</span><span>{fmt(kasirRev)}</span>
-                    </div>
-                    {Object.entries(incBySrc).map(([src, total]) => (
-                      <div key={src} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13, color: COLORS.cream }}>
-                        <span>{src === "marketplace" ? "Marketplace" : src === "consignment" ? "Consignment" : src === "b2b" ? "B2B Custom" : "Lainnya"}</span><span>{fmt(total)}</span>
+                  {[
+                    { label: "Total Revenue", value: fmt(totalRevenue), sub: `${filteredIncomes.length + filterByPeriod(transactions.filter(t => t.tipe === "keluar" && ["wa","dm","web","event","terjual","direct"].includes(t.channel)), keuanganPeriod).length} transaksi`, color: COLORS.success },
+                    { label: "Total Expense", value: fmt(totalExp), sub: `${filteredExpenses.length} entri`, color: COLORS.danger },
+                    { label: "COGS Tercatat", value: fmt(cogsTotal), sub: "", color: COLORS.warning },
+                    { label: "A/R Outstanding", value: fmt(arOutstanding), sub: "", color: arOutstanding > 0 ? COLORS.warning : COLORS.success },
+                  ].map(row => (
+                    <div key={row.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${COLORS.brownLight}30` }}>
+                      <div>
+                        <div style={{ fontSize: 13, color: COLORS.cream, fontWeight: 500 }}>{row.label}</div>
+                        {row.sub && <div style={{ fontSize: 11, color: COLORS.textMuted }}>{row.sub}</div>}
                       </div>
-                    ))}
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 14, fontWeight: 700, color: COLORS.success, borderTop: `1px solid ${COLORS.brownLight}`, marginTop: 4 }}>
-                      <span>Total Pendapatan</span><span>{fmt(totalRevenue)}</span>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: row.color }}>{row.value}</div>
                     </div>
-                  </div>
-
-                  {/* COGS */}
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.aqua, marginBottom: 6, letterSpacing: 1 }}>HPP (COGS)</div>
-                    {Object.entries(byAccount).filter(([code]) => code.startsWith("5-")).sort((a,b) => a[0].localeCompare(b[0])).map(([code, d]) => (
-                      <div key={code} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0 4px 12px", fontSize: 12, color: COLORS.cream }}>
-                        <span style={{ color: COLORS.textMuted }}>{code}</span><span style={{ marginLeft: 8, flex: 1 }}>{d.name}</span><span>{fmt(d.total)}</span>
-                      </div>
-                    ))}
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13, fontWeight: 700, color: COLORS.warning, borderTop: `1px solid ${COLORS.brownLight}`, marginTop: 4 }}>
-                      <span>Laba Kotor</span><span>{fmt(grossProfit)}</span>
-                    </div>
-                  </div>
-
-                  {/* OpEx */}
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.aqua, marginBottom: 6, letterSpacing: 1 }}>BEBAN OPERASIONAL</div>
-                    {Object.entries(byAccount).filter(([code]) => code.startsWith("6-")).sort((a,b) => a[0].localeCompare(b[0])).map(([code, d]) => (
-                      <div key={code} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0 4px 12px", fontSize: 12, color: COLORS.cream }}>
-                        <span style={{ color: COLORS.textMuted }}>{code}</span><span style={{ marginLeft: 8, flex: 1 }}>{d.name}</span><span>{fmt(d.total)}</span>
-                      </div>
-                    ))}
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13, fontWeight: 700, color: COLORS.warning, borderTop: `1px solid ${COLORS.brownLight}`, marginTop: 4 }}>
-                      <span>Laba Operasional</span><span>{fmt(operatingProfit)}</span>
-                    </div>
-                  </div>
-
-                  {/* Other */}
-                  {otherExpTotal > 0 && (
-                    <div style={{ marginBottom: 12 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.aqua, marginBottom: 6, letterSpacing: 1 }}>BEBAN LAINNYA</div>
-                      {Object.entries(byAccount).filter(([code]) => code.startsWith("8-")).map(([code, d]) => (
-                        <div key={code} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0 4px 12px", fontSize: 12, color: COLORS.cream }}>
-                          <span style={{ color: COLORS.textMuted }}>{code}</span><span style={{ marginLeft: 8, flex: 1 }}>{d.name}</span><span>{fmt(d.total)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Net Profit */}
-                  <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", fontSize: 16, fontWeight: 800, color: netProfit >= 0 ? COLORS.success : COLORS.danger, borderTop: `2px solid ${COLORS.aqua}`, marginTop: 8 }}>
-                    <span>LABA BERSIH</span><span>{fmt(netProfit)}</span>
+                  ))}
+                  <div style={{ marginTop: 12, padding: "8px 12px", background: COLORS.brownLight + "30", borderRadius: 8, fontSize: 11, color: COLORS.textMuted, fontStyle: "italic" }}>
+                    Data ini estimasi. P&L lengkap tersedia setelah semua settlement dan COGS terkonfirmasi.
                   </div>
                 </div>
 
