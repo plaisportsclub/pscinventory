@@ -75,6 +75,7 @@ const navItems = [
   { id: "data", label: "Import Data", icon: "⬆" },
   { id: "kasir", label: "Kasir", icon: "🛒" },
   { id: "keuangan", label: "Keuangan", icon: "💰" },
+  { id: "alokasi", label: "Alokasi Channel", icon: "⇌" },
   { id: "settlement", label: "Settlement", icon: "🏦" },
   { id: "ai", label: "Tanya AI", icon: "✦" },
   { id: "settings", label: "Pengaturan", icon: "⚙" },
@@ -576,6 +577,13 @@ function PlaiInventory() {
   const [consDate, setConsDate] = useState(todayForInc);
   const [consRef, setConsRef] = useState("");
 
+  // ── Channel Allocation state ──
+  const [channelAllocation, setChannelAllocation] = useState([]);
+  const [allocWizardSku, setAllocWizardSku] = useState(null);
+  const [allocWizardDraft, setAllocWizardDraft] = useState({ web: 0, shopee: 0, tokped: 0, buffer: 0 });
+  const [allocFilter, setAllocFilter] = useState("semua");
+  const [allocSearch, setAllocSearch] = useState("");
+
   // Camera barcode scanner state
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraTarget, setCameraTarget] = useState(null); // "quickscan" | "form" | "kasir"
@@ -916,7 +924,7 @@ function PlaiInventory() {
     const loadAll = async () => {
       setSbSyncing(true);
       try {
-        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }, { data: expData, error: e5 }, { data: incData, error: e6 }, { data: jeData, error: e7 }, { data: rmData, error: e8 }, { data: bomData, error: e9 }, { data: poData, error: e10 }, { data: rmmData, error: e11 }, { data: purchData, error: e12 }, { data: settlData, error: e13 }] = await Promise.all([
+        const [{ data: inv, error: e1 }, { data: trans, error: e2 }, { data: pinj, error: e3 }, { data: bmap, error: e4 }, { data: expData, error: e5 }, { data: incData, error: e6 }, { data: jeData, error: e7 }, { data: rmData, error: e8 }, { data: bomData, error: e9 }, { data: poData, error: e10 }, { data: rmmData, error: e11 }, { data: purchData, error: e12 }, { data: settlData, error: e13 }, { data: allocData, error: e14 }] = await Promise.all([
           sbClient.from('inventory').select('*'),
           sbClient.from('transactions').select('*').order('id', { ascending: false }),
           sbClient.from('pinjaman').select('*').order('id', { ascending: false }),
@@ -930,6 +938,7 @@ function PlaiInventory() {
           sbClient.from('raw_material_movements').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
           sbClient.from('purchases').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
           sbClient.from('marketplace_settlements').select('*').order('id', { ascending: false }).then(r => r).catch(() => ({ data: null, error: null })),
+          sbClient.from('channel_allocation').select('*').then(r => r).catch(() => ({ data: null, error: null })),
         ]);
         if (e1 || e2 || e3) throw new Error((e1 || e2 || e3).message);
         if (inv && inv.length > 0) setInventory(inv);
@@ -949,6 +958,7 @@ function PlaiInventory() {
         if (rmmData) setRawMaterialMovements(rmmData);
         if (purchData) setPurchases(purchData);
         if (settlData) setSettlements(settlData);
+        if (allocData) setChannelAllocation(allocData);
         setSbConnected(true);
         showToast('✓ Terhubung ke database!', 'success');
       } catch(e) {
@@ -1003,6 +1013,10 @@ function PlaiInventory() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'marketplace_settlements' }, async () => {
         const { data } = await sbClient.from('marketplace_settlements').select('*').order('id', { ascending: false });
         if (data) setSettlements(data);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'channel_allocation' }, async () => {
+        const { data } = await sbClient.from('channel_allocation').select('*');
+        if (data) setChannelAllocation(data);
       })
       .subscribe();
     return () => sbClient.removeChannel(ch);
@@ -7387,6 +7401,217 @@ WHERE tags IS NULL;`}
       );
     },
 
+    alokasi: () => {
+      // ── helpers ──
+      const getAlloc = (sku, ch) => {
+        const row = channelAllocation.find(a => a.sku === sku && a.channel === ch);
+        return row ? row.qty : 0;
+      };
+      const channels = ["web", "shopee", "tokped", "buffer"];
+
+      // ── Summary data ──
+      const skuWithWeb = inventory.filter(i => getAlloc(i.sku, "web") > 0).length;
+      const skuWithShopee = inventory.filter(i => getAlloc(i.sku, "shopee") > 0).length;
+      const skuWithTokped = inventory.filter(i => getAlloc(i.sku, "tokped") > 0).length;
+      const skuBufferZero = inventory.filter(i => getAlloc(i.sku, "buffer") === 0).length;
+
+      // ── Filter & search ──
+      const filtered = inventory.filter(i => {
+        if (i.discontinued) return false;
+        const q = allocSearch.toLowerCase();
+        if (q && !i.sku.toLowerCase().includes(q) && !i.nama.toLowerCase().includes(q)) return false;
+        if (allocFilter === "web") return getAlloc(i.sku, "web") > 0 && getAlloc(i.sku, "shopee") === 0 && getAlloc(i.sku, "tokped") === 0;
+        if (allocFilter === "shopee") return getAlloc(i.sku, "shopee") > 0;
+        if (allocFilter === "tokped") return getAlloc(i.sku, "tokped") > 0;
+        return true;
+      });
+
+      // ── Save handler ──
+      const handleSaveAlloc = async () => {
+        if (!sbClient) { showToast("Database belum terhubung!", "danger"); return; }
+        const item = inventory.find(i => i.sku === allocWizardSku);
+        if (!item) return;
+        const total = (parseInt(allocWizardDraft.web) || 0) + (parseInt(allocWizardDraft.shopee) || 0) + (parseInt(allocWizardDraft.tokped) || 0) + (parseInt(allocWizardDraft.buffer) || 0);
+        if (total > item.stok) { showToast(`Total alokasi (${total}) melebihi stok (${item.stok})!`, "danger"); return; }
+        try {
+          for (const ch of channels) {
+            await sbClient.from('channel_allocation').upsert({ sku: allocWizardSku, channel: ch, qty: parseInt(allocWizardDraft[ch]) || 0 }, { onConflict: 'sku,channel' });
+          }
+          showToast("✅ Alokasi berhasil disimpan!");
+          setAllocWizardSku(null);
+          // Refresh
+          const { data } = await sbClient.from('channel_allocation').select('*');
+          if (data) setChannelAllocation(data);
+        } catch (e) {
+          showToast("Gagal simpan: " + e.message, "danger");
+        }
+      };
+
+      const openWizard = (sku) => {
+        setAllocWizardSku(sku);
+        setAllocWizardDraft({
+          web: getAlloc(sku, "web"),
+          shopee: getAlloc(sku, "shopee"),
+          tokped: getAlloc(sku, "tokped"),
+          buffer: getAlloc(sku, "buffer"),
+        });
+      };
+
+      const wizardItem = allocWizardSku ? inventory.find(i => i.sku === allocWizardSku) : null;
+      const wizardTotal = allocWizardSku ? (parseInt(allocWizardDraft.web) || 0) + (parseInt(allocWizardDraft.shopee) || 0) + (parseInt(allocWizardDraft.tokped) || 0) + (parseInt(allocWizardDraft.buffer) || 0) : 0;
+
+      return (
+        <div>
+          {/* ── A. Summary Cards ── */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
+            {[
+              { label: "Web Aktif", value: skuWithWeb, color: COLORS.aqua, icon: "🌐" },
+              { label: "Ada di Shopee", value: skuWithShopee, color: COLORS.warning, icon: "🟠" },
+              { label: "Ada di Tokped", value: skuWithTokped, color: COLORS.success, icon: "🟢" },
+              { label: "Buffer = 0", value: skuBufferZero, color: COLORS.danger, icon: "⚠" },
+            ].map((c, i) => (
+              <div key={i} style={s.card}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, color: COLORS.textMuted, letterSpacing: 1, textTransform: "uppercase" }}>{c.label}</span>
+                  <span style={{ fontSize: 20 }}>{c.icon}</span>
+                </div>
+                <div style={{ fontSize: 32, fontWeight: 800, color: c.color }}>{c.value}</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted }}>SKU</div>
+              </div>
+            ))}
+          </div>
+
+          {/* ── B. Filter bar ── */}
+          <div style={{ ...s.card, marginBottom: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              style={{ ...s.input, flex: 1, minWidth: 180 }}
+              placeholder="Cari SKU / nama produk..."
+              value={allocSearch}
+              onChange={e => setAllocSearch(e.target.value)}
+            />
+            <select style={{ ...s.select, width: "auto", minWidth: 140 }} value={allocFilter} onChange={e => setAllocFilter(e.target.value)}>
+              <option value="semua">Semua</option>
+              <option value="web">Web Only</option>
+              <option value="shopee">Ada Shopee</option>
+              <option value="tokped">Ada Tokped</option>
+            </select>
+            <span style={{ fontSize: 12, color: COLORS.textMuted }}>{filtered.length} produk</span>
+          </div>
+
+          {/* ── B. Table ── */}
+          <div style={{ ...s.card, padding: 0, overflow: "auto" }}>
+            <table style={s.table}>
+              <thead>
+                <tr>
+                  <th style={s.th}>SKU</th>
+                  <th style={s.th}>Produk</th>
+                  <th style={{ ...s.th, textAlign: "center" }}>Stok</th>
+                  <th style={{ ...s.th, textAlign: "center" }}>Web</th>
+                  <th style={{ ...s.th, textAlign: "center" }}>Shopee</th>
+                  <th style={{ ...s.th, textAlign: "center" }}>Tokped</th>
+                  <th style={{ ...s.th, textAlign: "center" }}>Buffer</th>
+                  <th style={{ ...s.th, minWidth: 120 }}>Distribusi</th>
+                  <th style={s.th}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(item => {
+                  const web = getAlloc(item.sku, "web");
+                  const shopee = getAlloc(item.sku, "shopee");
+                  const tokped = getAlloc(item.sku, "tokped");
+                  const buffer = getAlloc(item.sku, "buffer");
+                  const totalAlloc = web + shopee + tokped + buffer;
+                  const pctWeb = item.stok > 0 ? (web / item.stok) * 100 : 0;
+                  const pctShopee = item.stok > 0 ? (shopee / item.stok) * 100 : 0;
+                  const pctTokped = item.stok > 0 ? (tokped / item.stok) * 100 : 0;
+                  const pctBuffer = item.stok > 0 ? (buffer / item.stok) * 100 : 0;
+                  return (
+                    <tr key={item.sku}>
+                      <td style={s.td}><span style={s.skuBadge}>{item.sku}</span></td>
+                      <td style={{ ...s.td, fontSize: 12 }}>{item.nama}</td>
+                      <td style={{ ...s.td, textAlign: "center", fontWeight: 700, color: item.stok === 0 ? COLORS.danger : COLORS.cream }}>{item.stok}</td>
+                      <td style={{ ...s.td, textAlign: "center", color: web > 0 ? COLORS.aqua : COLORS.textMuted }}>{web}</td>
+                      <td style={{ ...s.td, textAlign: "center", color: shopee > 0 ? COLORS.warning : COLORS.textMuted }}>{shopee}</td>
+                      <td style={{ ...s.td, textAlign: "center", color: tokped > 0 ? COLORS.success : COLORS.textMuted }}>{tokped}</td>
+                      <td style={{ ...s.td, textAlign: "center", color: buffer > 0 ? COLORS.cream : COLORS.textMuted }}>{buffer}</td>
+                      <td style={s.td}>
+                        <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: COLORS.brownDark, minWidth: 100 }}>
+                          {pctWeb > 0 && <div style={{ width: `${pctWeb}%`, background: COLORS.aqua, transition: "width 0.3s" }} />}
+                          {pctShopee > 0 && <div style={{ width: `${pctShopee}%`, background: COLORS.warning, transition: "width 0.3s" }} />}
+                          {pctTokped > 0 && <div style={{ width: `${pctTokped}%`, background: COLORS.success, transition: "width 0.3s" }} />}
+                          {pctBuffer > 0 && <div style={{ width: `${pctBuffer}%`, background: COLORS.brownLight, transition: "width 0.3s" }} />}
+                        </div>
+                        {totalAlloc > 0 && <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 2 }}>{totalAlloc}/{item.stok}</div>}
+                      </td>
+                      <td style={s.td}>
+                        <button style={{ ...s.btn("primary"), padding: "5px 14px", fontSize: 11 }} onClick={() => openWizard(item.sku)}>Atur</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filtered.length === 0 && (
+                  <tr><td colSpan={9} style={{ ...s.td, textAlign: "center", color: COLORS.textMuted, padding: 40 }}>Tidak ada produk ditemukan</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* ── C. Wizard Modal ── */}
+          {allocWizardSku && wizardItem && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 9999 }} onClick={() => setAllocWizardSku(null)}>
+              <div style={{ ...s.card, width: 440, maxWidth: "90vw", maxHeight: "90vh", overflow: "auto" }} onClick={e => e.stopPropagation()}>
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: COLORS.cream, marginBottom: 4 }}>{wizardItem.nama}</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={s.skuBadge}>{wizardItem.sku}</span>
+                    <span style={{ fontSize: 12, color: COLORS.textMuted }}>Stok total: <strong style={{ color: COLORS.aqua }}>{wizardItem.stok}</strong></span>
+                  </div>
+                </div>
+
+                {channels.map(ch => (
+                  <div key={ch} style={s.formGroup}>
+                    <label style={s.label}>{ch === "web" ? "🌐 Web" : ch === "shopee" ? "🟠 Shopee" : ch === "tokped" ? "🟢 Tokopedia" : "🔒 Buffer"}</label>
+                    <input
+                      style={s.input}
+                      type="number"
+                      min="0"
+                      value={allocWizardDraft[ch]}
+                      onChange={e => setAllocWizardDraft(prev => ({ ...prev, [ch]: e.target.value }))}
+                    />
+                  </div>
+                ))}
+
+                {/* Live counter */}
+                <div style={{
+                  background: COLORS.brownDark, borderRadius: 8, padding: "12px 16px", marginBottom: 16,
+                  border: `1px solid ${wizardTotal > wizardItem.stok ? COLORS.danger : COLORS.brownLight}`
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 13, color: COLORS.textMuted }}>Total dialokasikan:</span>
+                    <span style={{ fontSize: 18, fontWeight: 800, color: wizardTotal > wizardItem.stok ? COLORS.danger : COLORS.aqua }}>
+                      {wizardTotal} <span style={{ fontSize: 12, fontWeight: 400, color: COLORS.textMuted }}>dari {wizardItem.stok}</span>
+                    </span>
+                  </div>
+                  {/* Mini progress bar */}
+                  <div style={{ height: 6, borderRadius: 3, background: COLORS.brownLight, marginTop: 8, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.min(100, wizardItem.stok > 0 ? (wizardTotal / wizardItem.stok) * 100 : 0)}%`, background: wizardTotal > wizardItem.stok ? COLORS.danger : COLORS.aqua, borderRadius: 3, transition: "width 0.3s" }} />
+                  </div>
+                  {wizardTotal > wizardItem.stok && (
+                    <div style={{ fontSize: 11, color: COLORS.danger, marginTop: 6 }}>⚠ Melebihi stok! Kurangi alokasi {wizardTotal - wizardItem.stok} unit.</div>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", gap: 12 }}>
+                  <button style={{ ...s.btn("primary"), flex: 1 }} onClick={handleSaveAlloc} disabled={wizardTotal > wizardItem.stok}>Simpan</button>
+                  <button style={{ ...s.btn("ghost"), flex: 1 }} onClick={() => setAllocWizardSku(null)}>Batal</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    },
+
     settlement: () => {
       const platformTagMap = { shopee: "Shopee", tokopedia: "Tokped", tiktok: "TikTok" };
       // Filter settlements by platform + period
@@ -7597,7 +7822,7 @@ WHERE tags IS NULL;`}
     dashboard: "Dashboard", scan: "Quick Scan ⚡", stok: "Cek Stok", masuk: "Barang Masuk", keluar: "Barang Terjual",
     marketing: "KOL & Pinjam 📱", rusak: "Rusak / Hilang", pinjam: "Peminjaman", laporan: "Laporan",
     label: "Cetak Label Barcode", data: "Import Data", ai: "Tanya AI ✦", settings: "Pengaturan ⚙",
-    kasir: "Kasir 🛒", keuangan: "Keuangan 💰", settlement: "Settlement 🏦"
+    kasir: "Kasir 🛒", keuangan: "Keuangan 💰", alokasi: "Alokasi Channel ⇌", settlement: "Settlement 🏦"
   };
 
   return (
