@@ -509,7 +509,7 @@ function PlaiInventory() {
   const [kasirShipCost, setKasirShipCost] = useState("");
   const [kasirMarketplace, setKasirMarketplace] = useState(false);
   const [kasirPelangganShipCost, setKasirPelangganShipCost] = useState("");
-  const [kasirChannel, setKasirChannel] = useState("event");
+  const [kasirChannel, setKasirChannel] = useState("");
 
   // Multi-SKU invoice mode for Barang Keluar
   const [invoiceMode, setInvoiceMode] = useState(false);
@@ -2011,6 +2011,7 @@ function PlaiInventory() {
 
   const confirmKasir = () => {
     if (cart.length === 0) return showToast("Keranjang kosong!", "danger");
+    if (!kasirChannel) return showToast("Pilih channel dulu!", "danger");
     const subtotal = cart.reduce((a, c) => a + c.harga * c.qty, 0);
     const diskonNilai = kasirDiskonTipe === "persen"
       ? Math.round(subtotal * (parseFloat(kasirDiskonNilai) || 0) / 100)
@@ -2065,7 +2066,7 @@ function PlaiInventory() {
     setKasirShipCost("");
     setKasirMarketplace(false);
     setKasirPelangganShipCost("");
-    setKasirChannel("event");
+    setKasirChannel("");
   };
 
   const handleAddNewSku = async () => {
@@ -6814,18 +6815,23 @@ END $$;`;
                 )}
               </div>
 
-              {/* Channel — Event only */}
+              {/* Channel — wajib dipilih */}
               <div style={{ marginBottom: 12 }}>
-                <label style={{ ...s.label, marginBottom: 6 }}>📣 Channel</label>
+                <label style={{ ...s.label, marginBottom: 6 }}>📣 Channel <span style={{ color: COLORS.danger }}>*</span></label>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {[["event","🛍️","Event / Bazaar"]].map(([val, icon, lbl]) => (
+                  {[["event","🛍️","Event"],["wa","💬","WA"],["dm","📩","DM"],["web","🌐","Web"]].map(([val, icon, lbl]) => (
                     <button key={val} onClick={() => setKasirChannel(val)}
                       style={{ ...s.btn(kasirChannel === val ? "primary" : "secondary"), flex: 1, fontSize: 11, padding: "7px 3px" }}>{icon} {lbl}</button>
                   ))}
                 </div>
-                <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 4 }}>
-                  Mode: Event &amp; Bazaar Offline · Tag: {CHANNEL_TAGS[kasirChannel] || "-"}
-                </div>
+                {!kasirChannel && (
+                  <div style={{ fontSize: 11, color: COLORS.danger, marginTop: 4 }}>⚠ Pilih channel dulu</div>
+                )}
+                {kasirChannel && (
+                  <div style={{ fontSize: 11, color: COLORS.warning, marginTop: 4 }}>
+                    Tag: {CHANNEL_TAGS[kasirChannel] || "-"}
+                  </div>
+                )}
               </div>
 
               {/* Staff */}
@@ -6858,10 +6864,10 @@ END $$;`;
                 {!kasirInvoiceManual.trim() && <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 3 }}>Kosong = nomor otomatis</div>}
               </div>
 
-              <button onClick={confirmKasir} disabled={cart.length === 0}
+              <button onClick={confirmKasir} disabled={cart.length === 0 || !kasirChannel}
                 style={{ ...s.btn("primary"), width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 800,
-                  background: cart.length === 0 ? COLORS.brownLight : COLORS.aqua, cursor: cart.length === 0 ? "not-allowed" : "pointer" }}>
-                ✓ Bayar {cart.length > 0 ? fmt(total) : ""}
+                  background: (cart.length === 0 || !kasirChannel) ? COLORS.brownLight : COLORS.aqua, cursor: (cart.length === 0 || !kasirChannel) ? "not-allowed" : "pointer" }}>
+                {!kasirChannel ? "⚠ Pilih channel dulu" : `✓ Bayar ${cart.length > 0 ? fmt(total) : ""}`}
               </button>
             </div>
           </div>
