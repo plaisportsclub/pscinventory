@@ -664,6 +664,16 @@ function PlaiInventory() {
   const [pjTanggal, setPjTanggal] = useState(new Date().toISOString().split("T")[0]);
   const [pjPeminjam, setPjPeminjam] = useState("");
 
+  // barang masuk - mode selector & restock state
+  const [masukMode, setMasukMode] = useState(null); // null | "restock" | "baru"
+  const [restockSku, setRestockSku] = useState("");
+  const [restockQty, setRestockQty] = useState(1);
+  const [restockTanggal, setRestockTanggal] = useState(new Date().toISOString().split("T")[0]);
+  const [restockSearch, setRestockSearch] = useState("");
+  const [restockDropOpen, setRestockDropOpen] = useState(false);
+  const [baruStep, setBaruStep] = useState(1); // 1 = register SKU, 2 = pilih A/B
+  const [baruCreatedSku, setBaruCreatedSku] = useState(null); // SKU baru yang just created
+
   // expense form
   const [expDate, setExpDate] = useState(new Date().toISOString().split("T")[0]);
   const [expAccount, setExpAccount] = useState("");
@@ -1488,6 +1498,51 @@ function PlaiInventory() {
     sbInsertTx(tx);
   };
 
+  const handleRestock = () => {
+    // Restock: barang lama, HPP & harga tetap dari master, stok +qty, journal Dr.1-10200 / Cr.1-10002-2
+    if (!restockSku) { showToast("Pilih produk dulu!", "danger"); return; }
+    const item = inventory.find(i => i.sku === restockSku);
+    if (!item) { showToast("Produk tidak ditemukan!", "danger"); return; }
+    const qty = parseInt(restockQty) || 0;
+    if (qty <= 0) { showToast("Isi jumlah!", "danger"); return; }
+    const today = restockTanggal || new Date().toISOString().split("T")[0];
+    const ts = Date.now();
+    const newStok = (item.stok || 0) + qty;
+    const hpp = item.hpp || 0;
+    const totalCost = hpp * qty;
+
+    // 1. Update inventory stok (HPP stays the same)
+    setInventory(prev => prev.map(i => i.sku === restockSku ? { ...i, stok: newStok } : i));
+    sbUpsertInventory(restockSku, newStok);
+
+    // 2. Insert transaction (masuk)
+    const tx = {
+      id: ts, tanggal: today, sku: item.sku, nama: item.nama,
+      tipe: "masuk", jumlah: qty, harga: item.harga || 0,
+      channel: "-", shipping: "none", shippingCost: 0,
+      catatan: `Restock @HPP Rp ${hpp.toLocaleString("id-ID")}`,
+      staff: STAFF_LIST[0]
+    };
+    setTransactions(prev => [tx, ...prev]);
+    sbInsertTx(tx);
+
+    // 3. Journal: Dr. 1-10200 Inventory / Cr. 1-10002-2 Bank
+    const dateStr = today.replace(/-/g, "");
+    const ref = `RST-${dateStr}-${String(ts).slice(-4)}`;
+    const jeDesc = `Restock: ${item.nama} x${qty} @Rp ${hpp.toLocaleString("id-ID")}`;
+    const journalRows = [
+      { id: ts + 10, date: today, reference: ref, journal_type: "PRODUCTION", debit_account: "1-10200", credit_account: "", amount: totalCost, description: jeDesc, source_sku: item.sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "Restock masuk", tags: "Restock; Inventory In" },
+      { id: ts + 11, date: today, reference: ref, journal_type: "PRODUCTION", debit_account: "", credit_account: "1-10002-2", amount: totalCost, description: jeDesc, source_sku: item.sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "Restock masuk", tags: "Restock; Bank Out" }
+    ];
+    setJournalEntries(prev => [...journalRows, ...prev]);
+    if (sbClient) sbClient.from('journal_entries').insert(journalRows).then(({ error }) => { if (error) console.error('Restock journal insert error:', error); });
+
+    showToast(`✓ Restock ${item.nama} +${qty} · HPP Rp ${hpp.toLocaleString("id-ID")} · Total Rp ${totalCost.toLocaleString("id-ID")}`);
+    setRestockSku(""); setRestockQty(1); setRestockSearch(""); setRestockDropOpen(false);
+    setRestockTanggal(new Date().toISOString().split("T")[0]);
+    setMasukMode(null);
+  };
+
   const handleMasukFlowB = (data) => {
     // Flow B: White label / beli jadi — stok +qty, update hpp, journal Dr.1-10200 / Cr.1-10002-2
     const item = inventory.find(i => i.sku === data.sku);
@@ -1527,7 +1582,7 @@ function PlaiInventory() {
     if (sbClient) sbClient.from('journal_entries').insert(journalRows).then(({ error }) => { if (error) console.error('WL journal insert error:', error); });
 
     showToast(`✓ White label ${item.nama} +${qty} masuk · HPP Rp ${hargaBeli.toLocaleString("id-ID")}`);
-    setMasukFlow(null);
+    setMasukFlow(null); setMasukMode(null); setBaruStep(1); setBaruCreatedSku(null);
   };
 
   const handleMasukFlowA = async () => {
@@ -1688,7 +1743,8 @@ function PlaiInventory() {
 
     // 10. Reset state + toast
     showToast(`✓ Produksi ${item.nama} +${qty} masuk · HPP Rp ${hppPerUnit.toLocaleString("id-ID")}/pcs · Total Rp ${totalCost.toLocaleString("id-ID")}`);
-    setMasukFlow(null); setMasukSelectedPurchase(null); setMasukMaterials([]);
+    setMasukFlow(null); setMasukMode(null); setBaruStep(1); setBaruCreatedSku(null);
+    setMasukSelectedPurchase(null); setMasukMaterials([]);
     setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0);
     setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); setMasukStep(1);
   };
@@ -2107,6 +2163,11 @@ function PlaiInventory() {
     }
     setNewSkuForm({ sku: "", nama: "", harga: "", hpp: "", stok: "" });
     setShowNewSkuForm(false);
+    // If in "baru" mode, auto-proceed to step 2 (A/B flow selector)
+    if (masukMode === "baru") {
+      setBaruCreatedSku(sku);
+      setBaruStep(2);
+    }
   };
 
   const handleDeleteProduct = (sku) => {
@@ -4236,90 +4297,13 @@ function PlaiInventory() {
 
     masuk: () => {
       const activePinjaman = pinjaman.filter(p => !p.kembali);
+      const activeInv = inventory.filter(i => !i.discontinued);
+      const restockItem = inventory.find(i => i.sku === restockSku);
+      const filtRestock = activeInv.filter(i => !restockSearch.trim() || i.sku.toLowerCase().includes(restockSearch.toLowerCase()) || i.nama.toLowerCase().includes(restockSearch.toLowerCase()));
+      const resetMasukAll = () => { setMasukMode(null); setMasukFlow(null); setMasukStep(1); setMasukSelectedPurchase(null); setMasukMaterials([]); setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0); setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); setRestockSku(""); setRestockQty(1); setRestockSearch(""); setRestockDropOpen(false); setRestockTanggal(new Date().toISOString().split("T")[0]); setShowNewSkuForm(false); setNewSkuForm({ sku: "", nama: "", harga: "", hpp: "", stok: "" }); setBaruStep(1); setBaruCreatedSku(null); };
       return (
       <div style={{ maxWidth: 560 }}>
         <p style={{ color: COLORS.textMuted, marginBottom: 20, fontSize: 13 }}>Catat barang yang masuk dari supplier atau restock.</p>
-
-        {/* ── Input SKU Baru ──────────────────────────────────── */}
-        <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.success}40` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={s.cardTitle}>➕ Input SKU Baru</div>
-            <button
-              onClick={() => { setShowNewSkuForm(v => !v); setNewSkuForm({ sku: "", nama: "", harga: "", hpp: "", stok: "" }); }}
-              style={{ background: showNewSkuForm ? COLORS.brownDark : COLORS.success, color: showNewSkuForm ? COLORS.textMuted : COLORS.brownDark, border: `1px solid ${COLORS.success}60`, borderRadius: 6, padding: "5px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-              {showNewSkuForm ? "Batal" : "Tambah SKU"}
-            </button>
-          </div>
-          <p style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 4, marginBottom: showNewSkuForm ? 16 : 0 }}>
-            Daftarkan produk baru ke inventory — satu SKU per form.
-          </p>
-          {showNewSkuForm && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div>
-                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Product Code (SKU) *</label>
-                  <input
-                    value={newSkuForm.sku}
-                    onChange={e => setNewSkuForm(f => ({ ...f, sku: e.target.value.toUpperCase() }))}
-                    placeholder="contoh: MMW2013L"
-                    style={{ ...s.input, width: "100%", boxSizing: "border-box", fontFamily: "monospace", textTransform: "uppercase" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Nama Produk *</label>
-                  <input
-                    value={newSkuForm.nama}
-                    onChange={e => setNewSkuForm(f => ({ ...f, nama: e.target.value }))}
-                    placeholder="contoh: Jersey Plai L"
-                    style={{ ...s.input, width: "100%", boxSizing: "border-box" }}
-                  />
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                <div>
-                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Harga Jual (Rp)</label>
-                  <input
-                    value={newSkuForm.harga}
-                    onChange={e => setNewSkuForm(f => ({ ...f, harga: e.target.value }))}
-                    placeholder="0"
-                    type="number"
-                    style={{ ...s.input, width: "100%", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>HPP / Buy Price (Rp)</label>
-                  <input
-                    value={newSkuForm.hpp}
-                    onChange={e => setNewSkuForm(f => ({ ...f, hpp: e.target.value }))}
-                    placeholder="0"
-                    type="number"
-                    style={{ ...s.input, width: "100%", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Total Stok Awal</label>
-                  <input
-                    value={newSkuForm.stok}
-                    onChange={e => setNewSkuForm(f => ({ ...f, stok: e.target.value }))}
-                    placeholder="0"
-                    type="number"
-                    min="0"
-                    style={{ ...s.input, width: "100%", boxSizing: "border-box" }}
-                  />
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
-                <button onClick={() => { setShowNewSkuForm(false); setNewSkuForm({ sku: "", nama: "", harga: "", hpp: "", stok: "" }); }}
-                  style={{ ...s.btn("secondary"), fontSize: 13 }}>Batal</button>
-                <button onClick={handleAddNewSku}
-                  style={{ ...s.btn("primary"), fontSize: 13, background: COLORS.success, color: COLORS.brownDark }}>
-                  ✓ Simpan SKU Baru
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-        {/* ── /Input SKU Baru ─────────────────────────────────── */}
 
         {/* ── WA Bot Purchases Notification ── */}
         {purchases.filter(p => p.source === "wa_bot" && p.status !== "received").length > 0 && (
@@ -4334,36 +4318,204 @@ function PlaiInventory() {
                   </div>
                   <div style={{ fontSize: 11, color: COLORS.textMuted }}>{p.date} · Rp {(p.total_amount||0).toLocaleString("id-ID")} · <span style={{ fontWeight: 600 }}>{p.status}</span></div>
                 </div>
-                <button onClick={() => { setMasukFlow("A"); setMasukSelectedPurchase(p); setMasukVendor(p.vendor); setMasukStep(2); }} style={{ background: COLORS.success, color: COLORS.brownDark, border: "none", borderRadius: 6, padding: "6px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Proses</button>
+                <button onClick={() => { setMasukMode("baru"); setBaruStep(2); setMasukFlow("A"); setMasukSelectedPurchase(p); setMasukVendor(p.vendor); setMasukStep(2); }} style={{ background: COLORS.success, color: COLORS.brownDark, border: "none", borderRadius: 6, padding: "6px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Proses</button>
               </div>
             ))}
           </div>
         )}
 
-        {/* ── Flow Selector ── */}
-        {!masukFlow && (
+        {/* ══════════════════════════════════════════════════════════ */}
+        {/* ── MODE SELECTOR: Restock vs Barang Baru ─────────────── */}
+        {/* ══════════════════════════════════════════════════════════ */}
+        {!masukMode && (
           <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
-            <div style={s.cardTitle}>Barang ini dari mana?</div>
-            <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Pilih jenis penerimaan barang jadi (finished goods).</p>
+            <div style={s.cardTitle}>Jenis Barang Masuk</div>
+            <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Pilih jenis penerimaan barang.</p>
             <div style={{ display: "flex", gap: 12 }}>
-              <button onClick={() => { setMasukFlow("A"); setMasukStep(1); }} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.aquaDark}`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.aqua, marginBottom: 4 }}>A) Dari Vendor Produksi</div>
-                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Ada purchase / DP sebelumnya</div>
+              <button onClick={() => setMasukMode("restock")} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.success}60`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
+                <div style={{ fontSize: 22, marginBottom: 6 }}>🔄</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.success, marginBottom: 4 }}>Restock</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Barang lama yang sudah punya SKU — tambah stok saja</div>
               </button>
-              <button onClick={() => setMasukFlow("B")} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.brownLight}`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.cream, marginBottom: 4 }}>B) White Label / Beli Jadi</div>
-                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Bayar dan terima bersamaan</div>
+              <button onClick={() => { setMasukMode("baru"); setBaruStep(1); setShowNewSkuForm(true); }} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.aquaDark}`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
+                <div style={{ fontSize: 22, marginBottom: 6 }}>➕</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.aqua, marginBottom: 4 }}>Barang Baru</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Belum punya SKU — daftarkan dulu, lalu catat sumber barang</div>
               </button>
             </div>
           </div>
         )}
 
-        {/* ── Flow B: White Label ── */}
+        {/* ══════════════════════════════════════════════════════════ */}
+        {/* ── MODE 1: RESTOCK ───────────────────────────────────── */}
+        {/* ══════════════════════════════════════════════════════════ */}
+        {masukMode === "restock" && (
+          <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.success}40` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={s.cardTitle}>🔄 Restock Barang Lama</div>
+              <button onClick={resetMasukAll} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>← Kembali</button>
+            </div>
+            <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Pilih SKU → HPP & harga jual otomatis dari data master.</p>
+
+            {/* SKU Picker */}
+            <div style={{ position: "relative", marginBottom: 14 }}>
+              <label style={s.label}>Pilih Produk</label>
+              {restockItem ? (
+                <div style={{ background: COLORS.success+"15", border: `1px solid ${COLORS.success}40`, borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.cream }}>{restockItem.nama}</div>
+                    <div style={{ fontSize: 11, color: COLORS.textMuted, fontFamily: "monospace" }}>{restockItem.sku} · Stok saat ini: <span style={{ color: COLORS.success, fontWeight: 700 }}>{restockItem.stok}</span></div>
+                  </div>
+                  <button onClick={() => { setRestockSku(""); setRestockSearch(""); }} style={{ background: "transparent", border: `1px solid ${COLORS.brownLight}`, borderRadius: 6, color: COLORS.textMuted, padding: "4px 8px", fontSize: 10, cursor: "pointer" }}>✕ Ganti</button>
+                </div>
+              ) : (
+                <div>
+                  <input style={s.input} placeholder="Cari SKU / nama produk..." value={restockSearch} onChange={e => { setRestockSearch(e.target.value); setRestockDropOpen(true); }} onFocus={() => setRestockDropOpen(true)} onBlur={() => setTimeout(() => setRestockDropOpen(false), 300)} />
+                  {restockDropOpen && filtRestock.length > 0 && (
+                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: COLORS.brownDark, border: `1px solid ${COLORS.brownLight}`, borderRadius: "0 0 8px 8px", maxHeight: 200, overflowY: "auto", zIndex: 100, boxShadow: "0 8px 24px rgba(0,0,0,0.4)" }}>
+                      {filtRestock.slice(0, 20).map(it => (
+                        <div key={it.sku} onMouseDown={e => e.preventDefault()} onClick={() => { setRestockSku(it.sku); setRestockSearch(""); setRestockDropOpen(false); showToast(`✓ ${it.nama}`); }} style={{ padding: "8px 14px", cursor: "pointer", borderBottom: `1px solid ${COLORS.brownLight}30`, display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                          <div><span style={{ color: COLORS.cream, fontWeight: 600 }}>{it.nama}</span> <span style={{ color: COLORS.textMuted, fontFamily: "monospace", fontSize: 10 }}>{it.sku}</span></div>
+                          <div style={{ color: getStokColor(it), fontWeight: 700 }}>{it.stok}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Info HPP & Harga (read-only) */}
+            {restockItem && (
+              <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: "10px 14px", marginBottom: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 2 }}>HPP (dari master)</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.aqua }}>Rp {(restockItem.hpp || 0).toLocaleString("id-ID")}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 2 }}>Harga Jual (dari master)</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.cream }}>Rp {(restockItem.harga || 0).toLocaleString("id-ID")}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Tanggal & Qty */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+              <div>
+                <label style={s.label}>Tanggal Masuk</label>
+                <input style={s.input} type="date" value={restockTanggal} onChange={e => setRestockTanggal(e.target.value)} max={new Date().toISOString().split("T")[0]} />
+              </div>
+              <div>
+                <label style={s.label}>Jumlah Masuk</label>
+                <input style={s.input} type="number" min="1" value={restockQty} onChange={e => setRestockQty(e.target.value)} />
+              </div>
+            </div>
+
+            {/* Preview */}
+            {restockItem && parseInt(restockQty) > 0 && (
+              <div style={{ background: COLORS.brownDark, borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: COLORS.textMuted }}>
+                Stok sekarang: <span style={{ color: COLORS.cream, fontWeight: 700 }}>{restockItem.stok}</span>
+                {" → setelah restock: "}
+                <span style={{ color: COLORS.success, fontWeight: 700 }}>{(restockItem.stok || 0) + (parseInt(restockQty) || 0)}</span>
+                {" · Total HPP: "}
+                <span style={{ color: COLORS.aqua, fontWeight: 700 }}>Rp {((restockItem.hpp || 0) * (parseInt(restockQty) || 0)).toLocaleString("id-ID")}</span>
+              </div>
+            )}
+
+            <button onClick={handleRestock} style={{ ...s.btn("primary"), width: "100%", background: COLORS.success, color: COLORS.brownDark, fontWeight: 700 }}>✓ Simpan Restock</button>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════ */}
+        {/* ── MODE 2: BARANG BARU ───────────────────────────────── */}
+        {/* ══════════════════════════════════════════════════════════ */}
+        {masukMode === "baru" && (
+          <div>
+            {/* Step indicator */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
+              <div style={{ background: baruStep >= 1 ? COLORS.aqua : COLORS.brownLight, color: baruStep >= 1 ? COLORS.brownDark : COLORS.textMuted, width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>1</div>
+              <div style={{ fontSize: 11, color: baruStep >= 1 ? COLORS.cream : COLORS.textMuted, fontWeight: baruStep === 1 ? 700 : 400 }}>Daftarkan SKU</div>
+              <div style={{ flex: 1, height: 1, background: COLORS.brownLight }} />
+              <div style={{ background: baruStep >= 2 ? COLORS.aqua : COLORS.brownLight, color: baruStep >= 2 ? COLORS.brownDark : COLORS.textMuted, width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>2</div>
+              <div style={{ fontSize: 11, color: baruStep >= 2 ? COLORS.cream : COLORS.textMuted, fontWeight: baruStep === 2 ? 700 : 400 }}>Sumber Barang</div>
+            </div>
+
+            {/* ── STEP 1: Daftarkan SKU Baru ── */}
+            {baruStep === 1 && (
+              <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <div style={s.cardTitle}>➕ Daftarkan SKU Baru</div>
+                  <button onClick={resetMasukAll} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>← Kembali</button>
+                </div>
+                <p style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 4, marginBottom: 16 }}>
+                  Daftarkan produk baru ke inventory — setelah disimpan, lanjut ke pilihan sumber barang.
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Product Code (SKU) *</label>
+                      <input value={newSkuForm.sku} onChange={e => setNewSkuForm(f => ({ ...f, sku: e.target.value.toUpperCase() }))} placeholder="contoh: MMW2013L" style={{ ...s.input, width: "100%", boxSizing: "border-box", fontFamily: "monospace", textTransform: "uppercase" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Nama Produk *</label>
+                      <input value={newSkuForm.nama} onChange={e => setNewSkuForm(f => ({ ...f, nama: e.target.value }))} placeholder="contoh: Jersey Plai L" style={{ ...s.input, width: "100%", boxSizing: "border-box" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Harga Jual (Rp)</label>
+                      <input value={newSkuForm.harga} onChange={e => setNewSkuForm(f => ({ ...f, harga: e.target.value }))} placeholder="0" type="number" style={{ ...s.input, width: "100%", boxSizing: "border-box" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>HPP / Buy Price (Rp)</label>
+                      <input value={newSkuForm.hpp} onChange={e => setNewSkuForm(f => ({ ...f, hpp: e.target.value }))} placeholder="0" type="number" style={{ ...s.input, width: "100%", boxSizing: "border-box" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: COLORS.textMuted, display: "block", marginBottom: 4 }}>Total Stok Awal</label>
+                      <input value={newSkuForm.stok} onChange={e => setNewSkuForm(f => ({ ...f, stok: e.target.value }))} placeholder="0" type="number" min="0" style={{ ...s.input, width: "100%", boxSizing: "border-box" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+                    <button onClick={resetMasukAll} style={{ ...s.btn("secondary"), fontSize: 13 }}>Batal</button>
+                    <button onClick={handleAddNewSku} style={{ ...s.btn("primary"), fontSize: 13, background: COLORS.success, color: COLORS.brownDark }}>✓ Simpan SKU → Lanjut</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── STEP 2: Pilih Sumber Barang (A/B) ── */}
+            {baruStep === 2 && !masukFlow && (
+              <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <div style={s.cardTitle}>Barang ini dari mana?</div>
+                  <button onClick={resetMasukAll} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>← Kembali</button>
+                </div>
+                {baruCreatedSku && (
+                  <div style={{ background: COLORS.success+"15", border: `1px solid ${COLORS.success}40`, borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 12 }}>
+                    <span style={{ color: COLORS.success, fontWeight: 700 }}>✓ SKU {baruCreatedSku}</span>
+                    <span style={{ color: COLORS.textMuted }}> berhasil didaftarkan — sekarang pilih sumber barang:</span>
+                  </div>
+                )}
+                <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Pilih jenis penerimaan barang jadi (finished goods).</p>
+                <div style={{ display: "flex", gap: 12 }}>
+                  <button onClick={() => { setMasukFlow("A"); setMasukStep(1); if (baruCreatedSku) setMasukProductSku(baruCreatedSku); }} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.aquaDark}`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.aqua, marginBottom: 4 }}>A) Dari Vendor Produksi</div>
+                    <div style={{ fontSize: 11, color: COLORS.textMuted }}>Ada purchase / DP sebelumnya</div>
+                  </button>
+                  <button onClick={() => { setMasukFlow("B"); if (baruCreatedSku) setWlSku(baruCreatedSku); }} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.brownLight}`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.cream, marginBottom: 4 }}>B) White Label / Beli Jadi</div>
+                    <div style={{ fontSize: 11, color: COLORS.textMuted }}>Bayar dan terima bersamaan</div>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Flow B: White Label ── */}
         {masukFlow === "B" && (() => {
           const selItem = inventory.find(i => i.sku === wlSku);
           const filtWl = inventory.filter(i => !i.discontinued && (!wlSearch.trim() || i.sku.toLowerCase().includes(wlSearch.toLowerCase()) || i.nama.toLowerCase().includes(wlSearch.toLowerCase())));
           const totalWl = (parseRp(wlHarga) || 0) * (parseInt(wlQty) || 0);
-          const resetWl = () => { setMasukFlow(null); setWlSku(""); setWlQty(1); setWlVendor(""); setWlHarga(""); setWlStaff(STAFF_LIST[0]); setWlSearch(""); setWlDropOpen(false); };
+          const resetWl = () => { setMasukFlow(null); setMasukMode(null); setBaruStep(1); setBaruCreatedSku(null); setWlSku(""); setWlQty(1); setWlVendor(""); setWlHarga(""); setWlStaff(STAFF_LIST[0]); setWlSearch(""); setWlDropOpen(false); };
           return (
             <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -4415,7 +4567,7 @@ function PlaiInventory() {
           <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={s.cardTitle}>Dari Vendor Produksi — Step {masukStep}/3</div>
-              <button onClick={() => { setMasukFlow(null); setMasukStep(1); setMasukSelectedPurchase(null); setMasukMaterials([]); setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0); setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); }} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>Batal</button>
+              <button onClick={() => { setMasukFlow(null); setMasukMode(null); setBaruStep(1); setBaruCreatedSku(null); setMasukStep(1); setMasukSelectedPurchase(null); setMasukMaterials([]); setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0); setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); }} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>Batal</button>
             </div>
             <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 16 }}>
               {masukStep === 1 ? "Pilih purchase yang sudah ada" : masukStep === 2 ? "Input material & biaya" : "Review & konfirmasi"}
@@ -4626,6 +4778,9 @@ function PlaiInventory() {
                 </div>
               );
             })()}
+          </div>
+        )}
+
           </div>
         )}
 
