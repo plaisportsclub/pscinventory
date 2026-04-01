@@ -646,6 +646,24 @@ function PlaiInventory() {
   const [riwayatPeriod, setRiwayatPeriod] = useState(new Date().toISOString().substring(0, 7)); // "YYYY-MM"
   const [riwayatTipeFilter, setRiwayatTipeFilter] = useState("semua");
   const [expandedPO, setExpandedPO] = useState(null); // production_order id
+
+  // marketing page state (KOL & Pinjam) — must be at top level for React hooks rules
+  const [mktScanInput, setMktScanInput] = useState("");
+  const [mktShowDrop, setMktShowDrop] = useState(false);
+  const [mktSku, setMktSku] = useState("");
+  const [mktJumlah, setMktJumlah] = useState(1);
+  const [mktStaff, setMktStaff] = useState(STAFF_LIST[0]);
+  const [mktTanggal, setMktTanggal] = useState(new Date().toISOString().split("T")[0]);
+  const [mktOngkir, setMktOngkir] = useState("");
+  const [mktKolName, setMktKolName] = useState("");
+  const [pjScanInput, setPjScanInput] = useState("");
+  const [pjShowDrop, setPjShowDrop] = useState(false);
+  const [pjSku, setPjSku] = useState("");
+  const [pjJumlah, setPjJumlah] = useState(1);
+  const [pjStaff, setPjStaff] = useState(STAFF_LIST[0]);
+  const [pjTanggal, setPjTanggal] = useState(new Date().toISOString().split("T")[0]);
+  const [pjPeminjam, setPjPeminjam] = useState("");
+
   // expense form
   const [expDate, setExpDate] = useState(new Date().toISOString().split("T")[0]);
   const [expAccount, setExpAccount] = useState("");
@@ -5331,21 +5349,7 @@ function PlaiInventory() {
     ),
 
     marketing: () => {
-      const [mktScanInput, setMktScanInput] = React.useState("");
-      const [mktShowDrop, setMktShowDrop] = React.useState(false);
-      const [mktSku, setMktSku] = React.useState("");
-      const [mktJumlah, setMktJumlah] = React.useState(1);
-      const [mktStaff, setMktStaff] = React.useState(STAFF_LIST[0]);
-      const [mktTanggal, setMktTanggal] = React.useState(new Date().toISOString().split("T")[0]);
-      const [mktOngkir, setMktOngkir] = React.useState("");
-      const [mktKolName, setMktKolName] = React.useState("");
-      const [pjScanInput, setPjScanInput] = React.useState("");
-      const [pjShowDrop, setPjShowDrop] = React.useState(false);
-      const [pjSku, setPjSku] = React.useState("");
-      const [pjJumlah, setPjJumlah] = React.useState(1);
-      const [pjStaff, setPjStaff] = React.useState(STAFF_LIST[0]);
-      const [pjTanggal, setPjTanggal] = React.useState(new Date().toISOString().split("T")[0]);
-      const [pjPeminjam, setPjPeminjam] = React.useState("");
+      // useState hooks moved to top level component (line ~649) to fix React hooks rules violation
       const todayStr = new Date().toISOString().split("T")[0];
       const activeInv = inventory.filter(i => !i.discontinued);
       const mktSelected = inventory.find(i => i.sku === mktSku);
