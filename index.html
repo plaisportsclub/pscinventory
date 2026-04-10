@@ -4443,16 +4443,16 @@ function PlaiInventory() {
         {/* ── MODE 1B: PRODUKSI (existing SKU → Flow A) ─────────── */}
         {/* ══════════════════════════════════════════════════════════ */}
         {masukMode === "produksi" && !masukFlow && (
-          <div style={{ ...s.card, marginBottom: 20, border: "1px solid #f59e0b40" }}>
+          <div style={{ ...s.card, marginBottom: 20, border: "1px solid #f59e0b40", overflow: "visible", position: "relative", zIndex: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <div style={s.cardTitle}>🏭 Produksi — Pilih Produk</div>
               <button onClick={resetMasukAll} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>← Kembali</button>
             </div>
-            <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Pilih SKU yang akan diproduksi dari bahan baku + vendor jahit.</p>
+            <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Ketik nama atau SKU produk yang akan diproduksi.</p>
 
-            {/* SKU Picker (same as restock but leads to Flow A) */}
+            {/* SKU Picker — searchable input */}
             <div style={{ position: "relative", marginBottom: 14 }}>
-              <label style={s.label}>Pilih Produk</label>
+              <label style={s.label}>Cari Produk</label>
               {restockItem ? (
                 <div style={{ background: "#f59e0b15", border: "1px solid #f59e0b40", borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
@@ -4462,16 +4462,21 @@ function PlaiInventory() {
                   <button onClick={() => { setRestockSku(""); setRestockSearch(""); }} style={{ background: "transparent", border: `1px solid ${COLORS.brownLight}`, borderRadius: 6, color: COLORS.textMuted, padding: "4px 8px", fontSize: 10, cursor: "pointer" }}>✕ Ganti</button>
                 </div>
               ) : (
-                <div>
-                  <input style={s.input} placeholder="Cari SKU / nama produk..." value={restockSearch} onChange={e => { setRestockSearch(e.target.value); setRestockDropOpen(true); }} onFocus={() => setRestockDropOpen(true)} onBlur={() => setTimeout(() => setRestockDropOpen(false), 300)} />
-                  {restockDropOpen && filtRestock.length > 0 && (
-                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: COLORS.brownMid, border: `1px solid ${COLORS.brownLight}`, borderRadius: 8, maxHeight: 200, overflowY: "auto", zIndex: 100 }}>
-                      {filtRestock.map(i => (
-                        <div key={i.sku} onMouseDown={() => { setRestockSku(i.sku); setRestockSearch(""); setRestockDropOpen(false); }} style={{ padding: "8px 12px", cursor: "pointer", borderBottom: `1px solid ${COLORS.brownLight}30`, fontSize: 12 }}>
-                          <span style={{ color: COLORS.cream, fontWeight: 600 }}>{i.nama}</span>
-                          <span style={{ color: COLORS.textMuted, fontSize: 10, marginLeft: 8, fontFamily: "monospace" }}>{i.sku}</span>
+                <div style={{ position: "relative" }}>
+                  <input style={s.input} placeholder="Ketik: runaway, topi, FSU8011..." value={restockSearch} onChange={e => { setRestockSearch(e.target.value); setRestockDropOpen(true); }} onFocus={() => setRestockDropOpen(true)} onBlur={() => setTimeout(() => setRestockDropOpen(false), 400)} />
+                  {restockDropOpen && restockSearch.trim().length > 0 && filtRestock.length > 0 && (
+                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: COLORS.brownMid, border: `1px solid ${COLORS.brownLight}`, borderRadius: 8, maxHeight: 250, overflowY: "auto", zIndex: 9999, boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
+                      {filtRestock.slice(0, 15).map(i => (
+                        <div key={i.sku} onMouseDown={() => { setRestockSku(i.sku); setRestockSearch(""); setRestockDropOpen(false); }} style={{ padding: "10px 14px", cursor: "pointer", borderBottom: `1px solid ${COLORS.brownLight}30`, fontSize: 12 }}>
+                          <span style={{ color: COLORS.cream, fontWeight: 600 }}>{i.nama}</span><br/>
+                          <span style={{ color: COLORS.textMuted, fontSize: 10, fontFamily: "monospace" }}>{i.sku} · stok: {i.stok}</span>
                         </div>
                       ))}
+                    </div>
+                  )}
+                  {restockDropOpen && restockSearch.trim().length > 0 && filtRestock.length === 0 && (
+                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: COLORS.brownMid, border: `1px solid ${COLORS.brownLight}`, borderRadius: 8, padding: "12px 14px", zIndex: 9999, boxShadow: "0 8px 24px rgba(0,0,0,0.5)", fontSize: 12, color: COLORS.textMuted }}>
+                      Tidak ditemukan produk "{restockSearch}"
                     </div>
                   )}
                 </div>
