@@ -665,7 +665,7 @@ function PlaiInventory() {
   const [pjPeminjam, setPjPeminjam] = useState("");
 
   // barang masuk - mode selector & restock state
-  const [masukMode, setMasukMode] = useState(null); // null | "restock" | "baru"
+  const [masukMode, setMasukMode] = useState(null); // null | "restock" | "baru" | "produksi"
   const [restockSku, setRestockSku] = useState("");
   const [restockQty, setRestockQty] = useState(1);
   const [restockTanggal, setRestockTanggal] = useState(new Date().toISOString().split("T")[0]);
@@ -1526,16 +1526,18 @@ function PlaiInventory() {
     setTransactions(prev => [tx, ...prev]);
     sbInsertTx(tx);
 
-    // 3. Journal: Dr. 1-10200 Inventory / Cr. 1-10002-2 Bank
+    // 3. Journal: Dr. 1-10200 Inventory FG / Cr. 1-10002-2 BCA (proper double-entry)
     const dateStr = today.replace(/-/g, "");
     const ref = `RST-${dateStr}-${String(ts).slice(-4)}`;
     const jeDesc = `Restock: ${item.nama} x${qty} @Rp ${hpp.toLocaleString("id-ID")}`;
-    const journalRows = [
-      { id: ts + 10, date: today, reference: ref, journal_type: "PRODUCTION", debit_account: "1-10200", credit_account: "", amount: totalCost, description: jeDesc, source_sku: item.sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "Restock masuk", tags: "Restock; Inventory In" },
-      { id: ts + 11, date: today, reference: ref, journal_type: "PRODUCTION", debit_account: "", credit_account: "1-10002-2", amount: totalCost, description: jeDesc, source_sku: item.sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "Restock masuk", tags: "Restock; Bank Out" }
-    ];
-    setJournalEntries(prev => [...journalRows, ...prev]);
-    if (sbClient) sbClient.from('journal_entries').insert(journalRows).then(({ error }) => { if (error) console.error('Restock journal insert error:', error); });
+    const journalRow = {
+      id: ts + 10, date: today, reference: ref, journal_type: "RESTOCK",
+      debit_account: "1-10200", credit_account: "1-10002-2", amount: totalCost,
+      description: jeDesc, source_sku: item.sku, source_id: `RST-${ts}`,
+      period_label: today.substring(0, 7), memo: "Restock masuk", tags: "Restock; Inventory In"
+    };
+    setJournalEntries(prev => [journalRow, ...prev]);
+    if (sbClient) sbClient.from('journal_entries').insert([journalRow]).then(({ error }) => { if (error) console.error('Restock journal insert error:', error); });
 
     showToast(`✓ Restock ${item.nama} +${qty} · HPP Rp ${hpp.toLocaleString("id-ID")} · Total Rp ${totalCost.toLocaleString("id-ID")}`);
     setRestockSku(""); setRestockQty(1); setRestockSearch(""); setRestockDropOpen(false);
@@ -1571,15 +1573,17 @@ function PlaiInventory() {
     setTransactions(prev => [tx, ...prev]);
     sbInsertTx(tx);
 
-    // 3. Journal entry: Dr. 1-10200 Inventory / Cr. 1-10002-2 Bank
+    // 3. Journal entry: Dr. 1-10200 Inventory FG / Cr. 1-10002-2 BCA (proper double-entry)
     const ref = `WL-${dateStr}-${String(ts).slice(-4)}`;
     const jeDesc = `White label: ${item.nama} x${qty} @Rp ${hargaBeli.toLocaleString("id-ID")}`;
-    const journalRows = [
-      { id: ts + 10, date: today, reference: ref, journal_type: "PRODUCTION", debit_account: "1-10200", credit_account: "", amount: totalCost, description: jeDesc, source_sku: data.sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "White label masuk", tags: "White Label; Inventory In" },
-      { id: ts + 11, date: today, reference: ref, journal_type: "PRODUCTION", debit_account: "", credit_account: "1-10002-2", amount: totalCost, description: jeDesc, source_sku: data.sku, source_id: String(ts), period_label: today.substring(0, 7), memo: "White label masuk", tags: "White Label; Bank Out" }
-    ];
-    setJournalEntries(prev => [...journalRows, ...prev]);
-    if (sbClient) sbClient.from('journal_entries').insert(journalRows).then(({ error }) => { if (error) console.error('WL journal insert error:', error); });
+    const journalRow = {
+      id: ts + 10, date: today, reference: ref, journal_type: "PURCHASE",
+      debit_account: "1-10200", credit_account: "1-10002-2", amount: totalCost,
+      description: jeDesc, source_sku: data.sku, source_id: `WL-${ts}`,
+      period_label: today.substring(0, 7), memo: "White label masuk", tags: "White Label; Inventory In"
+    };
+    setJournalEntries(prev => [journalRow, ...prev]);
+    if (sbClient) sbClient.from('journal_entries').insert([journalRow]).then(({ error }) => { if (error) console.error('WL journal insert error:', error); });
 
     showToast(`✓ White label ${item.nama} +${qty} masuk · HPP Rp ${hargaBeli.toLocaleString("id-ID")}`);
     setMasukFlow(null); setMasukMode(null); setBaruStep(1); setBaruCreatedSku(null);
@@ -1686,59 +1690,44 @@ function PlaiInventory() {
     }
 
     // 9. Journal entries (await)
+    // NOTE: Material consumption journals (Dr 1-10200 FG / Cr 1-10201 RM) are
+    // AUTO-CREATED by DB trigger on raw_material_movements. Only create journals
+    // here for additional costs NOT covered by triggers (ongkos jahit, shipping, biaya lain).
     const journalRows = [];
     let jeIdx = 0;
-    journalRows.push({
-      id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
-      debit_account: "1-10200", credit_account: "", amount: totalCost,
-      description: `Produksi ${item.nama} x${qty}`, source_sku: masukProductSku,
-      source_id: String(ts), period_label: periodLabel,
-      memo: "Production order masuk", tags: "Production; Inventory In"
-    });
-    for (const m of masukMaterials) {
-      const mQty = parseRp(m.qty) || 0;
-      const mHpp = parseRp(m.hpp_per_unit) || 0;
-      const mTotal = mQty * mHpp;
-      if (mTotal <= 0) continue;
-      journalRows.push({
-        id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
-        debit_account: "", credit_account: m.coa_account || "1-10201", amount: mTotal,
-        description: `Konsumsi ${m.nama} ${mQty}${m.satuan || "pcs"}`,
-        source_sku: masukProductSku, source_id: String(ts), period_label: periodLabel,
-        memo: "Raw material consumed", tags: m.tags || "Production"
-      });
-    }
     if (ongkosJahit > 0) {
       journalRows.push({
         id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
-        debit_account: "", credit_account: "1-10402", amount: ongkosJahit,
-        description: `Ongkos jahit ${masukVendor || "vendor"}`,
-        source_sku: masukProductSku, source_id: String(ts), period_label: periodLabel,
-        memo: "Prepaid expense — ongkos jahit", tags: "Production; Ongkos Jahit"
+        debit_account: "1-10200", credit_account: "1-10002-2", amount: ongkosJahit,
+        description: `Ongkos jahit ${masukVendor || "vendor"} → ${item.nama} x${qty}`,
+        source_sku: masukProductSku, source_id: `PROD-JAHIT-${ts}`, period_label: periodLabel,
+        memo: "Ongkos jahit → Finished Goods", tags: "Production; Ongkos Jahit"
       });
     }
     if (shippingGudang > 0) {
       journalRows.push({
         id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
-        debit_account: "", credit_account: "1-10002-2", amount: shippingGudang,
-        description: `Shipping gudang dari ${masukVendor || "vendor"}`,
-        source_sku: masukProductSku, source_id: String(ts), period_label: periodLabel,
+        debit_account: "1-10200", credit_account: "1-10002-2", amount: shippingGudang,
+        description: `Shipping gudang ${masukVendor || "vendor"} → ${item.nama}`,
+        source_sku: masukProductSku, source_id: `PROD-SHIP-${ts}`, period_label: periodLabel,
         memo: "Shipping vendor ke gudang", tags: "Production; Shipping"
       });
     }
     if (biayaLain > 0) {
       journalRows.push({
         id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
-        debit_account: "", credit_account: "1-10002-2", amount: biayaLain,
-        description: `Biaya lain produksi: ${masukVendor || "vendor"}`,
-        source_sku: masukProductSku, source_id: String(ts), period_label: periodLabel,
+        debit_account: "1-10200", credit_account: "1-10002-2", amount: biayaLain,
+        description: `Biaya lain produksi ${masukVendor || "vendor"} → ${item.nama}`,
+        source_sku: masukProductSku, source_id: `PROD-LAIN-${ts}`, period_label: periodLabel,
         memo: "Additional production cost", tags: "Production; Biaya Lain"
       });
     }
-    setJournalEntries(prev => [...journalRows, ...prev]);
-    if (sbClient) {
-      const { error } = await sbClient.from('journal_entries').insert(journalRows);
-      if (error) { console.error('Production journal insert error:', error); showToast('DB error journal: ' + error.message, 'danger'); }
+    if (journalRows.length > 0) {
+      setJournalEntries(prev => [...journalRows, ...prev]);
+      if (sbClient) {
+        const { error } = await sbClient.from('journal_entries').insert(journalRows);
+        if (error) { console.error('Production journal insert error:', error); showToast('DB error journal: ' + error.message, 'danger'); }
+      }
     }
 
     // 10. Reset state + toast
@@ -4331,18 +4320,30 @@ function PlaiInventory() {
           <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
             <div style={s.cardTitle}>Jenis Barang Masuk</div>
             <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Pilih jenis penerimaan barang.</p>
-            <div style={{ display: "flex", gap: 12 }}>
-              <button onClick={() => setMasukMode("restock")} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.success}60`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <button onClick={() => setMasukMode("restock")} style={{ flex: 1, minWidth: 140, background: COLORS.brownDark, border: `2px solid ${COLORS.success}60`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
                 <div style={{ fontSize: 22, marginBottom: 6 }}>🔄</div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.success, marginBottom: 4 }}>Restock</div>
-                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Barang lama yang sudah punya SKU — tambah stok saja</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Tambah stok saja — HPP tetap</div>
               </button>
-              <button onClick={() => { setMasukMode("baru"); setBaruStep(1); setShowNewSkuForm(true); }} style={{ flex: 1, background: COLORS.brownDark, border: `2px solid ${COLORS.aquaDark}`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
+              <button onClick={() => setMasukMode("produksi")} style={{ flex: 1, minWidth: 140, background: COLORS.brownDark, border: `2px solid #f59e0b`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
+                <div style={{ fontSize: 22, marginBottom: 6 }}>🏭</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#f59e0b", marginBottom: 4 }}>Produksi</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Dari vendor jahit — consume bahan baku, hitung HPP baru</div>
+              </button>
+              <button onClick={() => { setMasukMode("baru"); setBaruStep(1); setShowNewSkuForm(true); }} style={{ flex: 1, minWidth: 140, background: COLORS.brownDark, border: `2px solid ${COLORS.aquaDark}`, borderRadius: 12, padding: "18px 14px", cursor: "pointer", textAlign: "left" }}>
                 <div style={{ fontSize: 22, marginBottom: 6 }}>➕</div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.aqua, marginBottom: 4 }}>Barang Baru</div>
-                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Belum punya SKU — daftarkan dulu, lalu catat sumber barang</div>
+                <div style={{ fontSize: 11, color: COLORS.textMuted }}>Belum punya SKU — daftarkan dulu</div>
               </button>
             </div>
+            {/* Quick: Pending purchases */}
+            {(() => { const pp = purchases.filter(p => p.status === "dp_paid" || p.status === "paid"); return pp.length > 0 ? (
+              <div style={{ marginTop: 12, background: "#f59e0b15", border: "1px solid #f59e0b40", borderRadius: 8, padding: "8px 12px" }}>
+                <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700, marginBottom: 4 }}>📦 {pp.length} purchase siap diproses</div>
+                <div style={{ fontSize: 10, color: COLORS.textMuted }}>{pp.slice(0, 3).map(p => `${p.vendor} — Rp ${(p.total_amount||0).toLocaleString("id-ID")}`).join(" · ")}{pp.length > 3 ? ` +${pp.length - 3} lainnya` : ""}</div>
+              </div>
+            ) : null; })()}
           </div>
         )}
 
@@ -4423,6 +4424,51 @@ function PlaiInventory() {
             )}
 
             <button onClick={handleRestock} style={{ ...s.btn("primary"), width: "100%", background: COLORS.success, color: COLORS.brownDark, fontWeight: 700 }}>✓ Simpan Restock</button>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════ */}
+        {/* ── MODE 1B: PRODUKSI (existing SKU → Flow A) ─────────── */}
+        {/* ══════════════════════════════════════════════════════════ */}
+        {masukMode === "produksi" && !masukFlow && (
+          <div style={{ ...s.card, marginBottom: 20, border: "1px solid #f59e0b40" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={s.cardTitle}>🏭 Produksi — Pilih Produk</div>
+              <button onClick={resetMasukAll} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>← Kembali</button>
+            </div>
+            <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 16 }}>Pilih SKU yang akan diproduksi dari bahan baku + vendor jahit.</p>
+
+            {/* SKU Picker (same as restock but leads to Flow A) */}
+            <div style={{ position: "relative", marginBottom: 14 }}>
+              <label style={s.label}>Pilih Produk</label>
+              {restockItem ? (
+                <div style={{ background: "#f59e0b15", border: "1px solid #f59e0b40", borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.cream }}>{restockItem.nama}</div>
+                    <div style={{ fontSize: 11, color: COLORS.textMuted, fontFamily: "monospace" }}>{restockItem.sku} · Stok saat ini: <span style={{ color: "#f59e0b", fontWeight: 700 }}>{restockItem.stok}</span></div>
+                  </div>
+                  <button onClick={() => { setRestockSku(""); setRestockSearch(""); }} style={{ background: "transparent", border: `1px solid ${COLORS.brownLight}`, borderRadius: 6, color: COLORS.textMuted, padding: "4px 8px", fontSize: 10, cursor: "pointer" }}>✕ Ganti</button>
+                </div>
+              ) : (
+                <div>
+                  <input style={s.input} placeholder="Cari SKU / nama produk..." value={restockSearch} onChange={e => { setRestockSearch(e.target.value); setRestockDropOpen(true); }} onFocus={() => setRestockDropOpen(true)} onBlur={() => setTimeout(() => setRestockDropOpen(false), 300)} />
+                  {restockDropOpen && filtRestock.length > 0 && (
+                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: COLORS.brownMid, border: `1px solid ${COLORS.brownLight}`, borderRadius: 8, maxHeight: 200, overflowY: "auto", zIndex: 100 }}>
+                      {filtRestock.map(i => (
+                        <div key={i.sku} onMouseDown={() => { setRestockSku(i.sku); setRestockSearch(""); setRestockDropOpen(false); }} style={{ padding: "8px 12px", cursor: "pointer", borderBottom: `1px solid ${COLORS.brownLight}30`, fontSize: 12 }}>
+                          <span style={{ color: COLORS.cream, fontWeight: 600 }}>{i.nama}</span>
+                          <span style={{ color: COLORS.textMuted, fontSize: 10, marginLeft: 8, fontFamily: "monospace" }}>{i.sku}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {restockItem && (
+              <button onClick={() => { setMasukProductSku(restockSku); setMasukFlow("A"); setMasukStep(1); }} style={{ ...s.btn("primary"), width: "100%", background: "#f59e0b", color: COLORS.brownDark, fontWeight: 700 }}>Lanjut ke Produksi →</button>
+            )}
           </div>
         )}
 
