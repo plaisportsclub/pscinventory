@@ -4669,7 +4669,10 @@ function PlaiInventory() {
                                 <div style={{ fontSize: 13, color: COLORS.cream, fontWeight: 600 }}>{p.vendor}{p.source === "wa_bot" ? " 🤖" : ""}</div>
                                 <div style={{ fontSize: 11, color: COLORS.textMuted }}>{p.date} · Rp {(p.total_amount||0).toLocaleString("id-ID")} · {p.description ? p.description.substring(0, 60) : ""}</div>
                               </div>
-                              <span style={{ background: p.status === "paid" ? COLORS.success+"30" : COLORS.warning+"30", color: p.status === "paid" ? COLORS.success : COLORS.warning, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>{p.status}</span>
+                              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                                <span style={{ background: p.status === "paid" ? COLORS.success+"30" : COLORS.warning+"30", color: p.status === "paid" ? COLORS.success : COLORS.warning, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>{p.status}</span>
+                                <span style={{ background: p.debit_account === "1-10200" ? "#f59e0b30" : COLORS.aqua+"30", color: p.debit_account === "1-10200" ? "#f59e0b" : COLORS.aqua, padding: "1px 6px", borderRadius: 3, fontSize: 9, fontWeight: 600 }}>{p.debit_account === "1-10200" ? "→ Ongkos Jahit" : "→ Bahan Baku"}</span>
+                              </div>
                             </div>
                             {checked && (
                               <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${COLORS.brownLight}30`, display: "flex", alignItems: "center", gap: 8 }} onClick={e => e.stopPropagation()}>
@@ -4696,7 +4699,37 @@ function PlaiInventory() {
                   <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                     <button onClick={() => { setMasukStep(2); }} style={{ ...s.btn("secondary"), fontSize: 11 }}>Lanjut tanpa purchase</button>
                     {masukSelectedPurchases.length > 0 && (
-                      <button onClick={() => { setMasukSelectedPurchase(masukSelectedPurchases[0]); setMasukVendor(masukSelectedPurchases.map(sp => sp.vendor).filter((v,i,a) => a.indexOf(v)===i).join(", ")); setMasukStep(2); }} style={{ ...s.btn("primary"), fontSize: 11 }}>Lanjut dengan {masukSelectedPurchases.length} purchase →</button>
+                      <button onClick={() => {
+                        // Auto-fill from selected purchases
+                        const vendors = masukSelectedPurchases.map(sp => sp.vendor).filter((v,i,a) => a.indexOf(v)===i).join(", ");
+                        setMasukSelectedPurchase(masukSelectedPurchases[0]);
+                        setMasukVendor(vendors);
+                        // Auto-fill Ongkos Jahit from production purchases (debit_account = 1-10200)
+                        const jahitTotal = masukSelectedPurchases
+                          .filter(sp => sp.debit_account === "1-10200")
+                          .reduce((s, sp) => s + (sp.allocated_amount || 0), 0);
+                        if (jahitTotal > 0) setMasukOngkosJahit(jahitTotal);
+                        // Auto-fill BOM if product SKU is set
+                        if (masukProductSku) {
+                          const bomItems = bom.filter(b => b.product_sku === masukProductSku);
+                          if (bomItems.length > 0 && masukMaterials.length === 0) {
+                            const qty = parseInt(masukQtyProduced) || 1;
+                            setMasukMaterials(bomItems.map(b => {
+                              const rm = rawMaterials.find(r => r.material_sku === b.material_sku);
+                              const qtyNeeded = parseFloat(b.qty_per_unit) * qty;
+                              return {
+                                material_sku: b.material_sku, nama: rm?.nama || b.material_sku,
+                                qty: Math.round(qtyNeeded * 100) / 100,
+                                hpp_per_unit: rm?.hpp_per_unit || 0,
+                                coa_account: rm?.coa_account || "1-10201",
+                                tags: rm?.tags || "", satuan: rm?.satuan || "pcs",
+                                stok_available: rm?.stok_qty || 0
+                              };
+                            }));
+                          }
+                        }
+                        setMasukStep(2);
+                      }} style={{ ...s.btn("primary"), fontSize: 11 }}>Lanjut dengan {masukSelectedPurchases.length} purchase →</button>
                     )}
                   </div>
                 </div>
