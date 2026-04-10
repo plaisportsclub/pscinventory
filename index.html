@@ -4608,7 +4608,10 @@ function PlaiInventory() {
           );
         })()}
 
-        {/* ── Flow A: Vendor Produksi (wizard) ── */}
+          </div>
+        )}
+
+        {/* ── Flow A: Vendor Produksi (wizard) — accessible from BOTH "baru" and "produksi" modes ── */}
         {masukFlow === "A" && (
           <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -4824,9 +4827,6 @@ function PlaiInventory() {
                 </div>
               );
             })()}
-          </div>
-        )}
-
           </div>
         )}
 
