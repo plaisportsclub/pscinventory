@@ -613,7 +613,8 @@ function PlaiInventory() {
   const [purchases, setPurchases] = useState([]);
   // ── Barang Masuk flow state ──
   const [masukFlow, setMasukFlow] = useState(null); // null | 'A' | 'B'
-  const [masukSelectedPurchase, setMasukSelectedPurchase] = useState(null);
+  const [masukSelectedPurchase, setMasukSelectedPurchase] = useState(null); // legacy single
+  const [masukSelectedPurchases, setMasukSelectedPurchases] = useState([]); // multi-select [{...purchase, allocated_amount}]
   const [masukMaterials, setMasukMaterials] = useState([]); // [{material_sku, nama, qty, hpp_per_unit, coa_account, tags}]
   const [masukOngkosJahit, setMasukOngkosJahit] = useState(0);
   const [masukShippingGudang, setMasukShippingGudang] = useState(0);
@@ -1663,13 +1664,24 @@ function PlaiInventory() {
       if (error) { console.error('raw_material_movements insert error:', error); showToast('DB error movements: ' + error.message, 'danger'); }
     }
 
-    // 7. Update purchase status (await)
-    if (masukSelectedPurchase) {
+    // 7. Update purchase status (await) — handle multi-purchase
+    for (const sp of masukSelectedPurchases) {
+      const pid = sp.id;
+      // If full amount allocated, mark as received. If partial, keep as paid.
+      const newStatus = (sp.allocated_amount >= sp.total_amount) ? "received" : sp.status;
+      setPurchases(prev => prev.map(p => p.id === pid ? { ...p, status: newStatus, qty_received: qty, hpp_per_unit: hppPerUnit } : p));
+      if (sbClient) {
+        const { error } = await sbClient.from('purchases').update({ status: newStatus, qty_received: qty, hpp_per_unit: hppPerUnit }).eq('id', pid);
+        if (error) { console.error('purchases update error:', error); showToast('DB error purchases: ' + error.message, 'danger'); }
+      }
+    }
+    // Legacy single purchase fallback
+    if (masukSelectedPurchases.length === 0 && masukSelectedPurchase) {
       const pid = masukSelectedPurchase.id;
       setPurchases(prev => prev.map(p => p.id === pid ? { ...p, status: "received", qty_received: qty, hpp_per_unit: hppPerUnit } : p));
       if (sbClient) {
         const { error } = await sbClient.from('purchases').update({ status: "received", qty_received: qty, hpp_per_unit: hppPerUnit }).eq('id', pid);
-        if (error) { console.error('purchases update error:', error); showToast('DB error purchases: ' + error.message, 'danger'); }
+        if (error) { console.error('purchases update error:', error); }
       }
     }
 
@@ -1677,10 +1689,10 @@ function PlaiInventory() {
     const po = {
       id: ts + 200, date: today, reference: ref,
       product_sku: masukProductSku, product_nama: item.nama,
-      tipe_produksi: masukSelectedPurchase?.tipe_produksi || "vendor_full",
+      tipe_produksi: masukSelectedPurchases[0]?.tipe_produksi || masukSelectedPurchase?.tipe_produksi || "vendor_full",
       vendor: masukVendor || "", qty_produced: qty,
       total_cost: totalCost, hpp_per_unit: hppPerUnit,
-      purchase_id: masukSelectedPurchase?.id || null,
+      purchase_id: masukSelectedPurchases[0]?.id || masukSelectedPurchase?.id || null,
       status: "completed", period_label: periodLabel
     };
     setProductionOrders(prev => [po, ...prev]);
@@ -1733,7 +1745,7 @@ function PlaiInventory() {
     // 10. Reset state + toast
     showToast(`✓ Produksi ${item.nama} +${qty} masuk · HPP Rp ${hppPerUnit.toLocaleString("id-ID")}/pcs · Total Rp ${totalCost.toLocaleString("id-ID")}`);
     setMasukFlow(null); setMasukMode(null); setBaruStep(1); setBaruCreatedSku(null);
-    setMasukSelectedPurchase(null); setMasukMaterials([]);
+    setMasukSelectedPurchase(null); setMasukSelectedPurchases([]); setMasukMaterials([]);
     setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0);
     setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); setMasukStep(1);
   };
@@ -4289,7 +4301,7 @@ function PlaiInventory() {
       const activeInv = inventory.filter(i => !i.discontinued);
       const restockItem = inventory.find(i => i.sku === restockSku);
       const filtRestock = activeInv.filter(i => !restockSearch.trim() || i.sku.toLowerCase().includes(restockSearch.toLowerCase()) || i.nama.toLowerCase().includes(restockSearch.toLowerCase()));
-      const resetMasukAll = () => { setMasukMode(null); setMasukFlow(null); setMasukStep(1); setMasukSelectedPurchase(null); setMasukMaterials([]); setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0); setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); setRestockSku(""); setRestockQty(1); setRestockSearch(""); setRestockDropOpen(false); setRestockTanggal(new Date().toISOString().split("T")[0]); setShowNewSkuForm(false); setNewSkuForm({ sku: "", nama: "", harga: "", hpp: "", stok: "" }); setBaruStep(1); setBaruCreatedSku(null); };
+      const resetMasukAll = () => { setMasukMode(null); setMasukFlow(null); setMasukStep(1); setMasukSelectedPurchase(null); setMasukSelectedPurchases([]); setMasukMaterials([]); setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0); setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); setRestockSku(""); setRestockQty(1); setRestockSearch(""); setRestockDropOpen(false); setRestockTanggal(new Date().toISOString().split("T")[0]); setShowNewSkuForm(false); setNewSkuForm({ sku: "", nama: "", harga: "", hpp: "", stok: "" }); setBaruStep(1); setBaruCreatedSku(null); };
       return (
       <div style={{ maxWidth: 560 }}>
         <p style={{ color: COLORS.textMuted, marginBottom: 20, fontSize: 13 }}>Catat barang yang masuk dari supplier atau restock.</p>
@@ -4616,55 +4628,72 @@ function PlaiInventory() {
           <div style={{ ...s.card, marginBottom: 20, border: `1px solid ${COLORS.aquaDark}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div style={s.cardTitle}>Dari Vendor Produksi — Step {masukStep}/3</div>
-              <button onClick={() => { setMasukFlow(null); setMasukMode(null); setBaruStep(1); setBaruCreatedSku(null); setMasukStep(1); setMasukSelectedPurchase(null); setMasukMaterials([]); setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0); setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); }} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>Batal</button>
+              <button onClick={() => { setMasukFlow(null); setMasukMode(null); setBaruStep(1); setBaruCreatedSku(null); setMasukStep(1); setMasukSelectedPurchase(null); setMasukSelectedPurchases([]); setMasukMaterials([]); setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0); setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); }} style={{ ...s.btn("secondary"), fontSize: 11, padding: "4px 12px" }}>Batal</button>
             </div>
             <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 16 }}>
               {masukStep === 1 ? "Pilih purchase yang sudah ada" : masukStep === 2 ? "Input material & biaya" : "Review & konfirmasi"}
             </div>
-            {/* ── STEP 1: Pilih Purchase ── */}
+            {/* ── STEP 1: Pilih Purchase (multi-select with checkboxes) ── */}
             {masukStep === 1 && (() => {
               const pendingPurchases = purchases.filter(p => p.status === "dp_paid" || p.status === "paid");
-              const waBotPurchases = purchases.filter(p => p.source === "wa_bot" && p.status !== "received");
+              const isChecked = (pid) => masukSelectedPurchases.some(sp => sp.id === pid);
+              const togglePurchase = (p) => {
+                if (isChecked(p.id)) {
+                  setMasukSelectedPurchases(prev => prev.filter(sp => sp.id !== p.id));
+                } else {
+                  setMasukSelectedPurchases(prev => [...prev, { ...p, allocated_amount: p.total_amount }]);
+                }
+              };
+              const updateAllocated = (pid, val) => {
+                setMasukSelectedPurchases(prev => prev.map(sp => sp.id === pid ? { ...sp, allocated_amount: parseInt(val) || 0 } : sp));
+              };
+              const totalAllocated = masukSelectedPurchases.reduce((s, sp) => s + (sp.allocated_amount || 0), 0);
               return (
                 <div>
-                  {waBotPurchases.length > 0 && (
-                    <div style={{ marginBottom: 16 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.success, marginBottom: 8 }}>📦 Pending dari WA Bot</div>
-                      {waBotPurchases.map(p => (
-                        <div key={p.id} style={{ background: COLORS.brownDark, borderRadius: 8, padding: "10px 14px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <div>
-                            <div style={{ fontSize: 13, color: COLORS.cream, fontWeight: 600 }}>{p.vendor} <span style={{ background: COLORS.success, color: COLORS.brownDark, fontSize: 9, padding: "1px 6px", borderRadius: 4, fontWeight: 700, marginLeft: 6 }}>WA Bot</span></div>
-                            <div style={{ fontSize: 11, color: COLORS.textMuted }}>{p.date} · Rp {(p.total_amount||0).toLocaleString("id-ID")} · {p.status}</div>
-                          </div>
-                          <button onClick={() => { setMasukSelectedPurchase(p); setMasukVendor(p.vendor); setMasukStep(2); }} style={{ ...s.btn("primary"), fontSize: 11, padding: "6px 14px" }}>Pilih</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <p style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 12 }}>Centang purchase yang terkait produksi ini. Bisa pilih lebih dari satu. Atur jumlah yang dialokasikan jika perlu split.</p>
                   {pendingPurchases.length > 0 ? (
-                    <div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.cream, marginBottom: 8 }}>Purchase siap diproses:</div>
-                      <div style={{ overflowX: "auto" }}>
-                        <table style={s.table}><thead><tr>{["Vendor","Tanggal","Amount","Status",""].map(h=><th key={h} style={s.th}>{h}</th>)}</tr></thead><tbody>
-                          {pendingPurchases.map(p => (
-                            <tr key={p.id}>
-                              <td style={s.td}><span style={{ fontWeight: 600, color: COLORS.cream }}>{p.vendor}</span>{p.source === "wa_bot" && <span style={{ background: COLORS.success, color: COLORS.brownDark, fontSize: 8, padding: "1px 4px", borderRadius: 3, marginLeft: 4 }}>WA</span>}</td>
-                              <td style={s.td}>{p.date}</td>
-                              <td style={s.td}>Rp {(p.total_amount||0).toLocaleString("id-ID")}</td>
-                              <td style={s.td}><span style={{ background: p.status === "paid" ? COLORS.success+"30" : COLORS.warning+"30", color: p.status === "paid" ? COLORS.success : COLORS.warning, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>{p.status}</span></td>
-                              <td style={s.td}><button onClick={() => { setMasukSelectedPurchase(p); setMasukVendor(p.vendor); setMasukStep(2); }} style={{ ...s.btn("primary"), fontSize: 10, padding: "4px 12px" }}>Pilih</button></td>
-                            </tr>
-                          ))}
-                        </tbody></table>
-                      </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {pendingPurchases.map(p => {
+                        const checked = isChecked(p.id);
+                        const sp = masukSelectedPurchases.find(sp => sp.id === p.id);
+                        return (
+                          <div key={p.id} style={{ background: checked ? COLORS.aqua+"12" : COLORS.brownDark, border: `1px solid ${checked ? COLORS.aqua+"50" : COLORS.brownLight+"30"}`, borderRadius: 8, padding: "10px 14px", cursor: "pointer" }} onClick={() => togglePurchase(p)}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <div style={{ width: 20, height: 20, borderRadius: 4, border: `2px solid ${checked ? COLORS.aqua : COLORS.brownLight}`, background: checked ? COLORS.aqua : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: COLORS.brownDark, fontWeight: 700, flexShrink: 0 }}>{checked ? "✓" : ""}</div>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: 13, color: COLORS.cream, fontWeight: 600 }}>{p.vendor}{p.source === "wa_bot" ? " 🤖" : ""}</div>
+                                <div style={{ fontSize: 11, color: COLORS.textMuted }}>{p.date} · Rp {(p.total_amount||0).toLocaleString("id-ID")} · {p.description ? p.description.substring(0, 60) : ""}</div>
+                              </div>
+                              <span style={{ background: p.status === "paid" ? COLORS.success+"30" : COLORS.warning+"30", color: p.status === "paid" ? COLORS.success : COLORS.warning, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>{p.status}</span>
+                            </div>
+                            {checked && (
+                              <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${COLORS.brownLight}30`, display: "flex", alignItems: "center", gap: 8 }} onClick={e => e.stopPropagation()}>
+                                <span style={{ fontSize: 11, color: COLORS.textMuted, whiteSpace: "nowrap" }}>Alokasi untuk produk ini:</span>
+                                <input style={{ ...s.input, width: 120, padding: "4px 8px", fontSize: 12 }} type="number" min="0" max={p.total_amount} value={sp?.allocated_amount || 0} onChange={e => updateAllocated(p.id, e.target.value)} />
+                                <span style={{ fontSize: 10, color: COLORS.textMuted }}>dari Rp {(p.total_amount||0).toLocaleString("id-ID")}</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     <div style={{ textAlign: "center", padding: 20, color: COLORS.textMuted, fontSize: 13 }}>
-                      Belum ada purchase dengan status "dp_paid" atau "paid".<br/>
-                      <span style={{ fontSize: 11 }}>Buat purchase dulu atau pilih Flow B (White Label).</span>
+                      Belum ada purchase dengan status "dp_paid" atau "paid".
                     </div>
                   )}
-                  <button onClick={() => { setMasukStep(2); }} style={{ ...s.btn("secondary"), marginTop: 12, fontSize: 11 }}>Lanjut tanpa purchase (manual)</button>
+                  {masukSelectedPurchases.length > 0 && (
+                    <div style={{ marginTop: 12, background: COLORS.aqua+"10", border: `1px solid ${COLORS.aqua}30`, borderRadius: 8, padding: "8px 12px", fontSize: 12 }}>
+                      <span style={{ color: COLORS.textMuted }}>{masukSelectedPurchases.length} purchase dipilih · Total dialokasikan: </span>
+                      <span style={{ color: COLORS.aqua, fontWeight: 700 }}>Rp {totalAllocated.toLocaleString("id-ID")}</span>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <button onClick={() => { setMasukStep(2); }} style={{ ...s.btn("secondary"), fontSize: 11 }}>Lanjut tanpa purchase</button>
+                    {masukSelectedPurchases.length > 0 && (
+                      <button onClick={() => { setMasukSelectedPurchase(masukSelectedPurchases[0]); setMasukVendor(masukSelectedPurchases.map(sp => sp.vendor).filter((v,i,a) => a.indexOf(v)===i).join(", ")); setMasukStep(2); }} style={{ ...s.btn("primary"), fontSize: 11 }}>Lanjut dengan {masukSelectedPurchases.length} purchase →</button>
+                    )}
+                  </div>
                 </div>
               );
             })()}
@@ -4707,9 +4736,14 @@ function PlaiInventory() {
               const matTotal = masukMaterials.reduce((acc, m) => acc + ((parseRp(m.qty) || 0) * (parseRp(m.hpp_per_unit) || 0)), 0);
               return (
                 <div>
-                  {masukSelectedPurchase && (
+                  {masukSelectedPurchases.length > 0 && (
                     <div style={{ background: COLORS.aqua+"10", border: `1px solid ${COLORS.aqua}30`, borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 11, color: COLORS.textMuted }}>
-                      Purchase: <span style={{ color: COLORS.cream, fontWeight: 600 }}>{masukSelectedPurchase.vendor}</span> · {masukSelectedPurchase.date} · Rp {(masukSelectedPurchase.total_amount||0).toLocaleString("id-ID")}
+                      {masukSelectedPurchases.map((sp, i) => (
+                        <div key={sp.id} style={{ marginBottom: i < masukSelectedPurchases.length - 1 ? 4 : 0 }}>
+                          <span style={{ color: COLORS.cream, fontWeight: 600 }}>{sp.vendor}</span> · {sp.date} · Alokasi: <span style={{ color: COLORS.aqua, fontWeight: 600 }}>Rp {(sp.allocated_amount||0).toLocaleString("id-ID")}</span>
+                          {sp.allocated_amount < sp.total_amount && <span style={{ color: COLORS.warning }}> (partial dari Rp {(sp.total_amount||0).toLocaleString("id-ID")})</span>}
+                        </div>
+                      ))}
                     </div>
                   )}
                   {/* SKU Produk Jadi */}
