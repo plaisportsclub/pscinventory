@@ -619,6 +619,8 @@ function PlaiInventory() {
   const [masukOngkosJahit, setMasukOngkosJahit] = useState(0);
   const [masukShippingGudang, setMasukShippingGudang] = useState(0);
   const [masukBiayaLain, setMasukBiayaLain] = useState(0);
+  const [masukJurnalShipping, setMasukJurnalShipping] = useState(false); // toggle: include shipping in journal?
+  const [masukJurnalBiayaLain, setMasukJurnalBiayaLain] = useState(false); // toggle: include biaya lain in journal?
   const [masukQtyProduced, setMasukQtyProduced] = useState(0);
   const [masukProductSku, setMasukProductSku] = useState("");
   const [masukVendor, setMasukVendor] = useState("");
@@ -1716,7 +1718,7 @@ function PlaiInventory() {
         memo: "Ongkos jahit → Finished Goods", tags: "Production; Ongkos Jahit"
       });
     }
-    if (shippingGudang > 0) {
+    if (shippingGudang > 0 && masukJurnalShipping) {
       journalRows.push({
         id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
         debit_account: "1-10200", credit_account: "1-10002-2", amount: shippingGudang,
@@ -1725,7 +1727,7 @@ function PlaiInventory() {
         memo: "Shipping vendor ke gudang", tags: "Production; Shipping"
       });
     }
-    if (biayaLain > 0) {
+    if (biayaLain > 0 && masukJurnalBiayaLain) {
       journalRows.push({
         id: ts + 300 + jeIdx++, date: today, reference: ref, journal_type: "PRODUCTION",
         debit_account: "1-10200", credit_account: "1-10002-2", amount: biayaLain,
@@ -1742,11 +1744,23 @@ function PlaiInventory() {
       }
     }
 
-    // 10. Reset state + toast
-    showToast(`✓ Produksi ${item.nama} +${qty} masuk · HPP Rp ${hppPerUnit.toLocaleString("id-ID")}/pcs · Total Rp ${totalCost.toLocaleString("id-ID")}`);
+    // 10. Reset state + toast with journal confirmation
+    const jCount = journalRows.length + masukMaterials.filter(m => (parseRp(m.qty)||0) > 0).length; // frontend journals + trigger journals (1 per material)
+    const jMsg = jCount > 0 ? ` · ${jCount} jurnal otomatis dibuat` : "";
+    showToast(`✓ Produksi ${item.nama} +${qty} masuk · HPP Rp ${hppPerUnit.toLocaleString("id-ID")}/pcs${jMsg}`);
+    // Show detailed journal notification
+    const jDetails = [];
+    masukMaterials.forEach(m => { if ((parseRp(m.qty)||0) > 0) jDetails.push(`RM→FG: ${m.nama} Rp ${((parseRp(m.qty)||0)*(parseRp(m.hpp_per_unit)||0)).toLocaleString("id-ID")} (auto trigger)`); });
+    if (ongkosJahit > 0) jDetails.push(`Ongkos jahit: Rp ${ongkosJahit.toLocaleString("id-ID")}`);
+    if (shippingGudang > 0 && masukJurnalShipping) jDetails.push(`Shipping: Rp ${shippingGudang.toLocaleString("id-ID")}`);
+    if (biayaLain > 0 && masukJurnalBiayaLain) jDetails.push(`Biaya lain: Rp ${biayaLain.toLocaleString("id-ID")}`);
+    if (shippingGudang > 0 && !masukJurnalShipping) jDetails.push(`Shipping Rp ${shippingGudang.toLocaleString("id-ID")} — HPP only, tidak dijurnal`);
+    if (biayaLain > 0 && !masukJurnalBiayaLain) jDetails.push(`Biaya lain Rp ${biayaLain.toLocaleString("id-ID")} — HPP only, tidak dijurnal`);
+    if (jDetails.length > 0) setTimeout(() => showToast(`📒 Jurnal: ${jDetails.join(" · ")}`, "info"), 1500);
     setMasukFlow(null); setMasukMode(null); setBaruStep(1); setBaruCreatedSku(null);
     setMasukSelectedPurchase(null); setMasukSelectedPurchases([]); setMasukMaterials([]);
     setMasukOngkosJahit(0); setMasukShippingGudang(0); setMasukBiayaLain(0);
+    setMasukJurnalShipping(false); setMasukJurnalBiayaLain(false);
     setMasukQtyProduced(0); setMasukProductSku(""); setMasukVendor(""); setMasukStep(1);
   };
 
@@ -4832,9 +4846,24 @@ function PlaiInventory() {
                     <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.cream, marginBottom: 10 }}>Biaya Tambahan</div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                       <div><label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Ongkos Jahit (Rp)</label><input style={s.input} type="number" min="0" value={masukOngkosJahit} onChange={e => setMasukOngkosJahit(e.target.value)} /></div>
-                      <div><label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Shipping Gudang (Rp)</label><input style={s.input} type="number" min="0" value={masukShippingGudang} onChange={e => setMasukShippingGudang(e.target.value)} /></div>
-                      <div><label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Biaya Lain (Rp)</label><input style={s.input} type="number" min="0" value={masukBiayaLain} onChange={e => setMasukBiayaLain(e.target.value)} /></div>
+                      <div>
+                        <label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Shipping Gudang (Rp)</label>
+                        <input style={s.input} type="number" min="0" value={masukShippingGudang} onChange={e => setMasukShippingGudang(e.target.value)} />
+                        <label style={{ fontSize: 9, color: COLORS.textMuted, display: "flex", alignItems: "center", gap: 4, marginTop: 4, cursor: "pointer" }} onClick={() => setMasukJurnalShipping(!masukJurnalShipping)}>
+                          <span style={{ width: 14, height: 14, borderRadius: 3, border: `1px solid ${masukJurnalShipping ? COLORS.aqua : COLORS.brownLight}`, background: masukJurnalShipping ? COLORS.aqua : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: COLORS.brownDark }}>{masukJurnalShipping ? "✓" : ""}</span>
+                          Masukkan ke jurnal
+                        </label>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 3 }}>Biaya Lain (Rp)</label>
+                        <input style={s.input} type="number" min="0" value={masukBiayaLain} onChange={e => setMasukBiayaLain(e.target.value)} />
+                        <label style={{ fontSize: 9, color: COLORS.textMuted, display: "flex", alignItems: "center", gap: 4, marginTop: 4, cursor: "pointer" }} onClick={() => setMasukJurnalBiayaLain(!masukJurnalBiayaLain)}>
+                          <span style={{ width: 14, height: 14, borderRadius: 3, border: `1px solid ${masukJurnalBiayaLain ? COLORS.aqua : COLORS.brownLight}`, background: masukJurnalBiayaLain ? COLORS.aqua : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: COLORS.brownDark }}>{masukJurnalBiayaLain ? "✓" : ""}</span>
+                          Masukkan ke jurnal
+                        </label>
+                      </div>
                     </div>
+                    <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 8 }}>Ongkos jahit selalu masuk jurnal. Shipping & biaya lain hanya untuk HPP kecuali dicentang.</div>
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button onClick={() => setMasukStep(1)} style={{ ...s.btn("secondary"), flex: 1 }}>Kembali</button>
